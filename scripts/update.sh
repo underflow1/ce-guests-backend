@@ -2,7 +2,7 @@
 # Скрипт обновления на проде
 # Использование: ./scripts/update.sh
 
-set -e  # Остановка при ошибке
+# Не используем set -e, чтобы можно было обработать ошибки и перезапустить сервис
 
 # Цвета для вывода
 RED='\033[0;31m'
@@ -61,7 +61,35 @@ source venv/bin/activate
 CURRENT_MIGRATION=$(alembic current 2>/dev/null | grep -o '[a-f0-9]\{12\}' || echo "none")
 info "Текущая версия миграций: $CURRENT_MIGRATION"
 
-# Бэкап БД перед обновлением
+# Сохраняем текущий коммит для метаданных
+CURRENT_COMMIT=$(git rev-parse HEAD)
+
+# Флаг что сервис был остановлен (для восстановления при ошибке)
+SERVICE_WAS_RUNNING=false
+
+# Остановка сервиса перед бэкапом
+info "Остановка сервиса ce-guests-back для безопасного бэкапа..."
+if systemctl is-active --quiet ce-guests-back; then
+    SERVICE_WAS_RUNNING=true
+    sudo systemctl stop ce-guests-back
+    sleep 2  # Даем время сервису корректно остановиться
+    info "Сервис остановлен ✓"
+else
+    warn "Сервис уже остановлен"
+fi
+
+# Функция восстановления сервиса при ошибке
+restore_service_on_error() {
+    if [ "$SERVICE_WAS_RUNNING" = true ]; then
+        warn "Восстановление сервиса после ошибки..."
+        sudo systemctl start ce-guests-back || true
+    fi
+}
+
+# Обработка ошибок
+trap 'restore_service_on_error; exit 1' ERR
+
+# Бэкап БД (пока сервис остановлен)
 DB_FILE=$(python3 -c "from app.config import settings; print(settings.DATABASE_URL.replace('sqlite:///', '').replace('sqlite:///./', ''))")
 if [ -f "$DB_FILE" ]; then
     BACKUP_DIR="$REPO_PATH/backups"
@@ -71,7 +99,6 @@ if [ -f "$DB_FILE" ]; then
     cp "$DB_FILE" "$BACKUP_FILE"
     
     # Сохраняем метаданные о коммите в файл рядом с бэкапом
-    CURRENT_COMMIT=$(git rev-parse HEAD)
     META_FILE="${BACKUP_FILE}.meta"
     echo "COMMIT=$CURRENT_COMMIT" > "$META_FILE"
     echo "TIMESTAMP=$TIMESTAMP" >> "$META_FILE"
@@ -115,19 +142,33 @@ HEAD_MIGRATION=$(alembic heads | grep -o '[a-f0-9]\{12\}' | head -1)
 if [ "$CURRENT_MIGRATION" != "$HEAD_MIGRATION" ] && [ "$CURRENT_MIGRATION" != "none" ]; then
     info "Найдены новые миграции: $CURRENT_MIGRATION -> $HEAD_MIGRATION"
     info "Применение миграций..."
-    alembic upgrade head
+    if ! alembic upgrade head; then
+        error "Ошибка при применении миграций!"
+        restore_service_on_error
+        exit 1
+    fi
     info "Миграции применены ✓"
 elif [ "$CURRENT_MIGRATION" = "none" ]; then
     warn "Миграции не применены, применяем все..."
-    alembic upgrade head
+    if ! alembic upgrade head; then
+        error "Ошибка при применении миграций!"
+        restore_service_on_error
+        exit 1
+    fi
     info "Миграции применены ✓"
 else
     info "Нет новых миграций ✓"
 fi
 
-# Перезапуск сервиса
-info "Перезапуск сервиса ce-guests-back..."
-sudo systemctl restart ce-guests-back
+# Запуск сервиса после обновления
+info "Запуск сервиса ce-guests-back..."
+if ! sudo systemctl start ce-guests-back; then
+    error "Не удалось запустить сервис!"
+    exit 1
+fi
+
+# Отключаем trap после успешного запуска
+trap - ERR
 
 # Ждем немного чтобы сервис запустился
 sleep 3
