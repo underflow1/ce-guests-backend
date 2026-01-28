@@ -69,19 +69,19 @@ BACKUP_COMMIT="$COMMIT"
 info "Последний бэкап: $(basename "$LAST_BACKUP")"
 info "Коммит из бэкапа: $(git rev-parse --short "$BACKUP_COMMIT")"
 
-# Проверка идемпотентности - не откатываемся ли на тот же коммит
-if [ "$CURRENT_COMMIT" = "$BACKUP_COMMIT" ]; then
-    error "Уже на коммите из бэкапа! Откат не нужен."
-    error "Текущий коммит: $(git rev-parse --short "$CURRENT_COMMIT")"
-    error "Коммит бэкапа: $(git rev-parse --short "$BACKUP_COMMIT")"
-    exit 1
-fi
-
 # Проверяем что коммит из бэкапа существует
 if ! git rev-parse --verify "$BACKUP_COMMIT" > /dev/null 2>&1; then
     error "Коммит из бэкапа не найден: $BACKUP_COMMIT"
     error "Возможно код был переписан (force push)"
     exit 1
+fi
+
+# Проверка совпадения коммитов
+NEED_CODE_ROLLBACK=true
+if [ "$CURRENT_COMMIT" = "$BACKUP_COMMIT" ]; then
+    warn "Текущий коммит совпадает с коммитом из бэкапа"
+    warn "Код не будет откачен, но БД будет восстановлена из бэкапа"
+    NEED_CODE_ROLLBACK=false
 fi
 
 # Показываем что будет откачено
@@ -90,12 +90,18 @@ echo ""
 warn "=========================================="
 warn "Будет выполнено:"
 warn "=========================================="
-warn "1. Откат кода на коммит: $(git rev-parse --short "$BACKUP_COMMIT")"
-if [ -n "$PREVIOUS_COMMIT" ]; then
-    warn "   (предыдущий коммит: $(git rev-parse --short "$PREVIOUS_COMMIT"))"
+if [ "$NEED_CODE_ROLLBACK" = true ]; then
+    warn "1. Откат кода на коммит: $(git rev-parse --short "$BACKUP_COMMIT")"
+    if [ -n "$PREVIOUS_COMMIT" ]; then
+        warn "   (предыдущий коммит: $(git rev-parse --short "$PREVIOUS_COMMIT"))"
+    fi
+    warn "2. Восстановление БД из: $(basename "$LAST_BACKUP")"
+    warn "3. Перезапуск сервиса"
+else
+    warn "1. Восстановление БД из: $(basename "$LAST_BACKUP")"
+    warn "2. Перезапуск сервиса"
+    warn "   (код уже на нужном коммите, откат кода не требуется)"
 fi
-warn "2. Восстановление БД из: $(basename "$LAST_BACKUP")"
-warn "3. Перезапуск сервиса"
 warn "=========================================="
 echo ""
 
@@ -116,10 +122,14 @@ source venv/bin/activate
 # Получаем путь к БД
 DB_FILE=$(python3 -c "from app.config import settings; print(settings.DATABASE_URL.replace('sqlite:///', '').replace('sqlite:///./', ''))")
 
-# Откат кода
-info "Откат кода на коммит $BACKUP_COMMIT..."
-git reset --hard "$BACKUP_COMMIT"
-info "Код откачен ✓"
+# Откат кода (только если коммиты различаются)
+if [ "$NEED_CODE_ROLLBACK" = true ]; then
+    info "Откат кода на коммит $BACKUP_COMMIT..."
+    git reset --hard "$BACKUP_COMMIT"
+    info "Код откачен ✓"
+else
+    info "Код уже на нужном коммите, пропускаем откат кода ✓"
+fi
 
 # Остановка сервиса перед восстановлением БД
 info "Остановка сервиса ce-guests-back для безопасного восстановления БД..."
