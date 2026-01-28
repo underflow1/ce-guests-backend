@@ -195,9 +195,10 @@ step "Проверка python3-venv"
 PYTHON_VERSION_SHORT="${PYTHON_MAJOR}.${PYTHON_MINOR}"
 MISSING_PACKAGES=()
 
-# Проверяем наличие python3-venv
-if ! python3 -m venv --help > /dev/null 2>&1; then
-    MISSING_PACKAGES+=("python${PYTHON_VERSION_SHORT}-venv")
+# Проверяем наличие пакета через dpkg
+VENV_PACKAGE="python${PYTHON_VERSION_SHORT}-venv"
+if ! dpkg -l | grep -q "^ii.*${VENV_PACKAGE}"; then
+    MISSING_PACKAGES+=("$VENV_PACKAGE")
 fi
 
 step_progress_stop
