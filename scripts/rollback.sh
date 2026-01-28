@@ -172,7 +172,19 @@ fi
 
 # Проверка здоровья
 info "Проверка здоровья сервиса..."
-HEALTH_URL="http://127.0.0.1:8002/health"
+
+# Читаем HOST и PORT из .env файла
+if [ -f "$REPO_PATH/.env" ]; then
+    # Безопасное чтение переменных из .env (игнорируем комментарии и пустые строки)
+    ENV_HOST=$(grep -E "^HOST=" "$REPO_PATH/.env" | cut -d'=' -f2 | tr -d '"' | tr -d "'" || echo "127.0.0.1")
+    ENV_PORT=$(grep -E "^PORT=" "$REPO_PATH/.env" | cut -d'=' -f2 | tr -d '"' | tr -d "'" || echo "8000")
+else
+    warn ".env файл не найден, используем значения по умолчанию"
+    ENV_HOST="127.0.0.1"
+    ENV_PORT="8000"
+fi
+
+HEALTH_URL="http://${ENV_HOST}:${ENV_PORT}/health"
 if curl -s -f "$HEALTH_URL" > /dev/null 2>&1; then
     HEALTH_RESPONSE=$(curl -s "$HEALTH_URL")
     if echo "$HEALTH_RESPONSE" | grep -q '"status":"ok"'; then
