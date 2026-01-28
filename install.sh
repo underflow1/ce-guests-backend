@@ -165,7 +165,7 @@ success "Домен фронтенда: $CORS_ORIGINS"
 success "Бэкенд: $BACKEND_HOST:$BACKEND_PORT"
 
 # ============================================================================
-# ПРОВЕРКА PYTHON3
+# ПРОВЕРКА PYTHON3 И СИСТЕМНЫХ ЗАВИСИМОСТЕЙ
 # ============================================================================
 
 step "Проверка Python3"
@@ -188,6 +188,26 @@ fi
 
 step_done
 info "Найден Python3: $PYTHON_VERSION"
+
+# Проверка и установка python3-venv
+step "Проверка python3-venv"
+
+PYTHON_VERSION_SHORT="${PYTHON_MAJOR}.${PYTHON_MINOR}"
+MISSING_PACKAGES=()
+
+# Проверяем наличие python3-venv
+if ! python3 -m venv --help > /dev/null 2>&1; then
+    MISSING_PACKAGES+=("python${PYTHON_VERSION_SHORT}-venv")
+fi
+
+step_progress_stop
+
+if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
+    step_progress "Установка недостающих пакетов: ${MISSING_PACKAGES[*]}"
+    apt-get update -qq > /dev/null 2>&1
+    apt-get install -y "${MISSING_PACKAGES[@]}" > /dev/null 2>&1
+    step_progress_stop
+fi
 
 # ============================================================================
 # СОЗДАНИЕ ВИРТУАЛЬНОГО ОКРУЖЕНИЯ
