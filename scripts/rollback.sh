@@ -57,15 +57,17 @@ if ! git rev-parse --verify "$ROLLBACK_COMMIT" > /dev/null 2>&1; then
     exit 1
 fi
 
-info "Коммит для отката: $(git rev-parse --short "$ROLLBACK_COMMIT")"
-
 # Проверка идемпотентности: если уже откатились на нужный коммит, не делать ничего
+# Делаем проверку СРАЗУ, до всех остальных действий
 if [ "$CURRENT_COMMIT" = "$ROLLBACK_COMMIT" ]; then
     info "Уже откачено на коммит из последнего обновления"
     info "Текущий коммит: $(git rev-parse --short "$CURRENT_COMMIT")"
+    info "Коммит для отката: $(git rev-parse --short "$ROLLBACK_COMMIT")"
     info "Откат не требуется (идемпотентность)"
     exit 0
 fi
+
+info "Коммит для отката: $(git rev-parse --short "$ROLLBACK_COMMIT")"
 
 # Находим последний бэкап
 BACKUP_DIR="$REPO_PATH/backups"
