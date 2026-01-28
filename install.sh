@@ -352,6 +352,31 @@ EOF
 chmod 644 "$SERVICE_FILE"
 step_done
 
+# Создание файла sudoers для управления сервисом без пароля
+step "Настройка sudoers для управления сервисом"
+
+SUDOERS_FILE="/etc/sudoers.d/ce-guests-back"
+SUDOERS_RULE="${REAL_USER} ALL=(ALL) NOPASSWD: /bin/systemctl restart ce-guests-back, /bin/systemctl start ce-guests-back, /bin/systemctl stop ce-guests-back, /bin/systemctl status ce-guests-back"
+
+# Создаем файл sudoers
+cat > "$SUDOERS_FILE" <<EOF
+# Разрешение для пользователя $REAL_USER управлять сервисом ce-guests-back без пароля
+$SUDOERS_RULE
+EOF
+
+# Устанавливаем правильные права (0440 - только чтение для root и группы)
+chmod 0440 "$SUDOERS_FILE"
+
+# Проверяем синтаксис файла sudoers
+if ! visudo -c -f "$SUDOERS_FILE" > /dev/null 2>&1; then
+    step_progress_stop
+    error "Ошибка синтаксиса в файле sudoers. Удаляю файл."
+    rm -f "$SUDOERS_FILE"
+    exit 1
+fi
+
+step_done
+
 # Перезагрузка systemd
 step "Перезагрузка systemd daemon"
 systemctl daemon-reload > /dev/null 2>&1
