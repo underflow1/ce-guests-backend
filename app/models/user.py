@@ -24,6 +24,7 @@ class User(Base):
     entries_created = relationship("Entry", foreign_keys="Entry.created_by", back_populates="creator")
     entries_updated = relationship("Entry", foreign_keys="Entry.updated_by", back_populates="updater")
     entries_deleted = relationship("Entry", foreign_keys="Entry.deleted_by", back_populates="deleter")
+    refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(id={self.id}, username={self.username}, is_admin={self.is_admin})>"

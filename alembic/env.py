@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Импортируем модели и настройки
 from app.database import Base
 from app.config import settings
-from app.models import User, Entry, Role, Permission, RolePermission  # noqa
+from app.models import User, Entry, Role, Permission, RolePermission, RefreshToken  # noqa
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
