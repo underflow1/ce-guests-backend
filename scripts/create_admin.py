@@ -7,6 +7,8 @@
 """
 import sys
 import os
+import termios
+import tty
 
 # Добавляем корневую директорию в путь
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -16,6 +18,47 @@ from app.database import SessionLocal, engine
 from app.models.user import User
 from app.services.auth import get_password_hash, get_current_timestamp
 import argparse
+
+
+def getpass_with_stars(prompt="Password: "):
+    """Ввод пароля с отображением звездочек"""
+    print(prompt, end='', flush=True)
+    password = []
+    
+    # Сохраняем настройки терминала
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    
+    try:
+        # Переключаемся в raw mode
+        tty.setraw(sys.stdin.fileno())
+        
+        while True:
+            char = sys.stdin.read(1)
+            
+            # Enter - завершаем ввод
+            if char == '\n' or char == '\r':
+                break
+            # Backspace или Delete
+            elif char == '\x7f' or char == '\b':
+                if password:
+                    password.pop()
+                    sys.stdout.write('\b \b')
+                    sys.stdout.flush()
+            # Ctrl+C
+            elif char == '\x03':
+                raise KeyboardInterrupt
+            else:
+                password.append(char)
+                sys.stdout.write('*')
+                sys.stdout.flush()
+    
+    finally:
+        # Восстанавливаем настройки терминала
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        print()  # Новая строка после ввода
+    
+    return ''.join(password)
 
 
 def create_admin(username: str, password: str):
@@ -73,8 +116,7 @@ def main():
         username = args.username
     
     if not args.password:
-        import getpass
-        password = getpass.getpass("Введите пароль: ").strip()
+        password = getpass_with_stars("Введите пароль: ").strip()
         if not password:
             print("Ошибка: Пароль не может быть пустым")
             return
