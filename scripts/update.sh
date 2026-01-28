@@ -98,14 +98,11 @@ if [ -f "$DB_FILE" ]; then
     BACKUP_FILE="$BACKUP_DIR/backup_${TIMESTAMP}.db"
     cp "$DB_FILE" "$BACKUP_FILE"
     
-    # Сохраняем метаданные о коммите в файл рядом с бэкапом
-    META_FILE="${BACKUP_FILE}.meta"
-    echo "COMMIT=$CURRENT_COMMIT" > "$META_FILE"
-    echo "TIMESTAMP=$TIMESTAMP" >> "$META_FILE"
-    echo "BRANCH=$CURRENT_BRANCH" >> "$META_FILE"
+    # Сохраняем коммит обновления в один файл состояния (для идемпотентности rollback)
+    STATE_FILE="$REPO_PATH/.last_update_commit"
+    echo "$CURRENT_COMMIT" > "$STATE_FILE"
     
     info "Бэкап БД создан: $BACKUP_FILE"
-    info "Метаданные сохранены: $META_FILE"
     
     # Выводим команды для отката
     echo ""

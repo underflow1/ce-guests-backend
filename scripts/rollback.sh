@@ -40,6 +40,15 @@ fi
 CURRENT_COMMIT=$(git rev-parse HEAD)
 info "Текущий коммит: $(git rev-parse --short HEAD)"
 
+# Проверяем что есть предыдущий коммит
+PREVIOUS_COMMIT=$(git rev-parse HEAD~1 2>/dev/null || echo "")
+if [ -z "$PREVIOUS_COMMIT" ]; then
+    error "Нет предыдущего коммита для отката!"
+    exit 1
+fi
+
+info "Предыдущий коммит: $(git rev-parse --short "$PREVIOUS_COMMIT")"
+
 # Находим последний бэкап
 BACKUP_DIR="$REPO_PATH/backups"
 if [ ! -d "$BACKUP_DIR" ]; then
@@ -55,53 +64,32 @@ if [ -z "$LAST_BACKUP" ]; then
     exit 1
 fi
 
-LAST_BACKUP_META="${LAST_BACKUP}.meta"
-if [ ! -f "$LAST_BACKUP_META" ]; then
-    error "Метаданные бэкапа не найдены: $LAST_BACKUP_META"
-    error "Не могу определить коммит для отката"
-    exit 1
-fi
-
-# Читаем метаданные бэкапа
-source "$LAST_BACKUP_META"
-BACKUP_COMMIT="$COMMIT"
-
 info "Последний бэкап: $(basename "$LAST_BACKUP")"
-info "Коммит из бэкапа: $(git rev-parse --short "$BACKUP_COMMIT")"
 
-# Проверяем что коммит из бэкапа существует
-if ! git rev-parse --verify "$BACKUP_COMMIT" > /dev/null 2>&1; then
-    error "Коммит из бэкапа не найден: $BACKUP_COMMIT"
-    error "Возможно код был переписан (force push)"
-    exit 1
-fi
-
-# Проверка совпадения коммитов
-NEED_CODE_ROLLBACK=true
-if [ "$CURRENT_COMMIT" = "$BACKUP_COMMIT" ]; then
-    warn "Текущий коммит совпадает с коммитом из бэкапа"
-    warn "Код не будет откачен, но БД будет восстановлена из бэкапа"
-    NEED_CODE_ROLLBACK=false
+# Проверка идемпотентности: если уже откатились на один коммит назад, не делать ничего
+STATE_FILE="$REPO_PATH/.last_update_commit"
+if [ -f "$STATE_FILE" ]; then
+    LAST_UPDATE_COMMIT=$(cat "$STATE_FILE" | tr -d '\n')
+    
+    # Если текущий HEAD уже на один коммит раньше последнего обновления, значит уже откатились
+    LAST_UPDATE_PARENT=$(git rev-parse "$LAST_UPDATE_COMMIT~1" 2>/dev/null || echo "")
+    if [ -n "$LAST_UPDATE_PARENT" ] && [ "$CURRENT_COMMIT" = "$LAST_UPDATE_PARENT" ]; then
+        info "Уже откачено на один коммит назад от последнего обновления"
+        info "Текущий коммит: $(git rev-parse --short "$CURRENT_COMMIT")"
+        info "Коммит последнего обновления: $(git rev-parse --short "$LAST_UPDATE_COMMIT")"
+        info "Откат не требуется (идемпотентность)"
+        exit 0
+    fi
 fi
 
 # Показываем что будет откачено
-PREVIOUS_COMMIT=$(git rev-parse "$BACKUP_COMMIT~1" 2>/dev/null || echo "")
 echo ""
 warn "=========================================="
 warn "Будет выполнено:"
 warn "=========================================="
-if [ "$NEED_CODE_ROLLBACK" = true ]; then
-    warn "1. Откат кода на коммит: $(git rev-parse --short "$BACKUP_COMMIT")"
-    if [ -n "$PREVIOUS_COMMIT" ]; then
-        warn "   (предыдущий коммит: $(git rev-parse --short "$PREVIOUS_COMMIT"))"
-    fi
-    warn "2. Восстановление БД из: $(basename "$LAST_BACKUP")"
-    warn "3. Перезапуск сервиса"
-else
-    warn "1. Восстановление БД из: $(basename "$LAST_BACKUP")"
-    warn "2. Перезапуск сервиса"
-    warn "   (код уже на нужном коммите, откат кода не требуется)"
-fi
+warn "1. Откат кода на предыдущий коммит: $(git rev-parse --short "$PREVIOUS_COMMIT")"
+warn "2. Восстановление БД из: $(basename "$LAST_BACKUP")"
+warn "3. Перезапуск сервиса"
 warn "=========================================="
 echo ""
 
@@ -122,14 +110,10 @@ source venv/bin/activate
 # Получаем путь к БД
 DB_FILE=$(python3 -c "from app.config import settings; print(settings.DATABASE_URL.replace('sqlite:///', '').replace('sqlite:///./', ''))")
 
-# Откат кода (только если коммиты различаются)
-if [ "$NEED_CODE_ROLLBACK" = true ]; then
-    info "Откат кода на коммит $BACKUP_COMMIT..."
-    git reset --hard "$BACKUP_COMMIT"
-    info "Код откачен ✓"
-else
-    info "Код уже на нужном коммите, пропускаем откат кода ✓"
-fi
+# Откат кода на предыдущий коммит
+info "Откат кода на предыдущий коммит $PREVIOUS_COMMIT..."
+git reset --hard "$PREVIOUS_COMMIT"
+info "Код откачен ✓"
 
 # Остановка сервиса перед восстановлением БД
 info "Остановка сервиса ce-guests-back для безопасного восстановления БД..."
@@ -153,15 +137,10 @@ fi
 cp "$LAST_BACKUP" "$DB_FILE"
 info "БД восстановлена из: $(basename "$LAST_BACKUP") ✓"
 
-# Проверка миграций после отката кода
-CURRENT_MIGRATION=$(alembic current 2>/dev/null | grep -o '[a-f0-9]\{12\}' || echo "none")
-HEAD_MIGRATION=$(alembic heads | grep -o '[a-f0-9]\{12\}' | head -1)
-
-if [ "$CURRENT_MIGRATION" != "$HEAD_MIGRATION" ] && [ "$CURRENT_MIGRATION" != "none" ]; then
-    warn "Версия миграций изменилась после отката кода"
-    warn "Текущая: $CURRENT_MIGRATION, Новая: $HEAD_MIGRATION"
-    warn "Откатываем миграции на версию $HEAD_MIGRATION..."
-    alembic downgrade "$HEAD_MIGRATION" 2>/dev/null || warn "Не удалось откатить миграции автоматически"
+# Применение миграций после отката кода
+info "Применение миграций после отката кода..."
+if ! alembic upgrade head; then
+    warn "Не удалось применить миграции автоматически"
 fi
 
 # Запуск сервиса после восстановления
