@@ -67,9 +67,10 @@ fi
 info "Последний бэкап: $(basename "$LAST_BACKUP")"
 
 # Проверка идемпотентности: если уже откатились на один коммит назад, не делать ничего
-STATE_FILE="$REPO_PATH/.last_update_commit"
-if [ -f "$STATE_FILE" ]; then
-    LAST_UPDATE_COMMIT=$(cat "$STATE_FILE" | tr -d '\n')
+META_FILE="$REPO_PATH/.update_meta"
+if [ -f "$META_FILE" ]; then
+    source "$META_FILE"
+    LAST_UPDATE_COMMIT="$COMMIT"
     
     # Если текущий HEAD уже на один коммит раньше последнего обновления, значит уже откатились
     LAST_UPDATE_PARENT=$(git rev-parse "$LAST_UPDATE_COMMIT~1" 2>/dev/null || echo "")
