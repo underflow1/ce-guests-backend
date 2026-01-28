@@ -199,7 +199,17 @@ if [ -d "$REPO_PATH/venv" ]; then
     step_progress_stop
     warn "Виртуальное окружение уже существует"
 else
-    sudo -u "$REAL_USER" python3 -m venv "$REPO_PATH/venv" > /dev/null 2>&1
+    # Временно отключаем set -e для обработки ошибки вручную
+    set +e
+    sudo -u "$REAL_USER" python3 -m venv "$REPO_PATH/venv" 2>&1
+    VENV_EXIT_CODE=$?
+    set -e
+    
+    if [ $VENV_EXIT_CODE -ne 0 ]; then
+        step_progress_stop
+        error "Не удалось создать виртуальное окружение (код выхода: $VENV_EXIT_CODE)"
+        exit 1
+    fi
     step_done
 fi
 
@@ -208,11 +218,19 @@ fi
 # ============================================================================
 
 step_progress "Обновление pip"
-sudo -u "$REAL_USER" "$REPO_PATH/venv/bin/pip" install --upgrade pip --quiet > /dev/null 2>&1
+if ! sudo -u "$REAL_USER" "$REPO_PATH/venv/bin/pip" install --upgrade pip --quiet 2>&1; then
+    step_progress_stop
+    error "Не удалось обновить pip"
+    exit 1
+fi
 step_progress_stop
 
 step_progress "Установка зависимостей из requirements.txt"
-sudo -u "$REAL_USER" "$REPO_PATH/venv/bin/pip" install -r "$REPO_PATH/requirements.txt" --quiet > /dev/null 2>&1
+if ! sudo -u "$REAL_USER" "$REPO_PATH/venv/bin/pip" install -r "$REPO_PATH/requirements.txt" --quiet 2>&1; then
+    step_progress_stop
+    error "Не удалось установить зависимости"
+    exit 1
+fi
 step_progress_stop
 
 # ============================================================================
@@ -263,7 +281,11 @@ step_done
 # ============================================================================
 
 step_progress "Применение миграций БД"
-sudo -u "$REAL_USER" bash -c "cd $REPO_PATH && source venv/bin/activate && alembic upgrade head" > /dev/null 2>&1
+if ! sudo -u "$REAL_USER" bash -c "cd $REPO_PATH && source venv/bin/activate && alembic upgrade head" 2>&1; then
+    step_progress_stop
+    error "Не удалось применить миграции"
+    exit 1
+fi
 step_progress_stop
 
 # ============================================================================
@@ -302,7 +324,11 @@ if [ -z "$ADMIN_PASSWORD" ]; then
     exit 1
 fi
 
-sudo -u "$REAL_USER" bash -c "cd $REPO_PATH && source venv/bin/activate && python3 scripts/create_admin.py --username '$ADMIN_USERNAME' --password '$ADMIN_PASSWORD'" > /dev/null 2>&1
+if ! sudo -u "$REAL_USER" bash -c "cd $REPO_PATH && source venv/bin/activate && python3 scripts/create_admin.py --username '$ADMIN_USERNAME' --password '$ADMIN_PASSWORD'" 2>&1; then
+    step_progress_stop
+    error "Не удалось создать администратора"
+    exit 1
+fi
 step_done
 
 # ============================================================================
