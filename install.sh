@@ -298,13 +298,21 @@ chmod 600 "$ENV_FILE"
 step_done
 
 # ============================================================================
-# ПРИМЕНЕНИЕ МИГРАЦИЙ
+# ПРИМЕНЕНИЕ МИГРАЦИЙ И СОЗДАНИЕ ТАБЛИЦ
 # ============================================================================
 
 step_progress "Применение миграций БД"
 if ! sudo -u "$REAL_USER" bash -c "cd $REPO_PATH && source venv/bin/activate && alembic upgrade head" 2>&1; then
     step_progress_stop
     error "Не удалось применить миграции"
+    exit 1
+fi
+step_progress_stop
+
+step_progress "Создание таблиц БД (если не созданы)"
+if ! sudo -u "$REAL_USER" bash -c "cd $REPO_PATH && source venv/bin/activate && python3 -c 'from app.database import Base, engine; from app.models import User, Entry, Role, Permission, RolePermission; Base.metadata.create_all(engine)'" 2>&1; then
+    step_progress_stop
+    error "Не удалось создать таблицы БД"
     exit 1
 fi
 step_progress_stop
