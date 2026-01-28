@@ -64,6 +64,27 @@ info "Текущая версия миграций: $CURRENT_MIGRATION"
 # Сохраняем текущий коммит ДО обновления (для отката)
 COMMIT_BEFORE_UPDATE=$(git rev-parse HEAD)
 
+# Проверка: если уже обновлялись (текущий HEAD совпадает с коммитом из метаданных), предупреждаем
+META_FILE="$REPO_PATH/.update_meta"
+if [ -f "$META_FILE" ]; then
+    source "$META_FILE"
+    LAST_UPDATE_COMMIT="$COMMIT"
+    
+    # Если текущий HEAD равен коммиту из метаданных, значит уже обновлялись после последнего сохранения метаданных
+    if [ "$COMMIT_BEFORE_UPDATE" = "$LAST_UPDATE_COMMIT" ]; then
+        warn "Обнаружено повторное обновление!"
+        warn "Текущий коммит: $(git rev-parse --short "$COMMIT_BEFORE_UPDATE")"
+        warn "Коммит из метаданных: $(git rev-parse --short "$LAST_UPDATE_COMMIT")"
+        warn "Метаданные будут перезаписаны, откат вернет к этому коммиту"
+        warn "Продолжить? (yes/no)"
+        read -r CONFIRM
+        if [ "$CONFIRM" != "yes" ]; then
+            info "Обновление отменено"
+            exit 0
+        fi
+    fi
+fi
+
 # Флаг что сервис был остановлен (для восстановления при ошибке)
 SERVICE_WAS_RUNNING=false
 
@@ -100,7 +121,6 @@ if [ -f "$DB_FILE" ]; then
     
     # Сохраняем метаданные обновления в один файл (перезаписывается при каждом обновлении)
     # COMMIT - это коммит ДО обновления, на который нужно откатиться
-    META_FILE="$REPO_PATH/.update_meta"
     echo "COMMIT=$COMMIT_BEFORE_UPDATE" > "$META_FILE"
     echo "TIMESTAMP=$TIMESTAMP" >> "$META_FILE"
     echo "BRANCH=$CURRENT_BRANCH" >> "$META_FILE"
