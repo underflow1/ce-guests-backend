@@ -193,20 +193,20 @@ info "Найден Python3: $PYTHON_VERSION"
 step "Проверка python3-venv"
 
 PYTHON_VERSION_SHORT="${PYTHON_MAJOR}.${PYTHON_MINOR}"
-MISSING_PACKAGES=()
+VENV_PACKAGE="python${PYTHON_VERSION_SHORT}-venv"
 
 # Проверяем наличие пакета через dpkg
-VENV_PACKAGE="python${PYTHON_VERSION_SHORT}-venv"
 if ! dpkg -l | grep -q "^ii.*${VENV_PACKAGE}"; then
-    MISSING_PACKAGES+=("$VENV_PACKAGE")
-fi
-
-step_progress_stop
-
-if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
-    step_progress "Установка недостающих пакетов: ${MISSING_PACKAGES[*]}"
+    step_progress_stop
+    step_progress "Установка пакета: $VENV_PACKAGE"
     apt-get update -qq > /dev/null 2>&1
-    apt-get install -y "${MISSING_PACKAGES[@]}" > /dev/null 2>&1
+    if ! apt-get install -y "$VENV_PACKAGE" > /dev/null 2>&1; then
+        step_progress_stop
+        error "Не удалось установить $VENV_PACKAGE"
+        exit 1
+    fi
+    step_progress_stop
+else
     step_progress_stop
 fi
 
