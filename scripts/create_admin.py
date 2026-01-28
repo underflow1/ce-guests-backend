@@ -73,7 +73,8 @@ def main():
         username = args.username
     
     if not args.password:
-        password = input("Введите пароль: ").strip()
+        import getpass
+        password = getpass.getpass("Введите пароль: ").strip()
         if not password:
             print("Ошибка: Пароль не может быть пустым")
             return
