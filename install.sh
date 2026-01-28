@@ -338,6 +338,7 @@ User=$REAL_USER
 Group=$REAL_USER
 WorkingDirectory=$REPO_PATH
 Environment="PATH=$REPO_PATH/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="RELOAD=false"
 ExecStart=$REPO_PATH/venv/bin/python3 $REPO_PATH/run.py
 Restart=always
 RestartSec=10
