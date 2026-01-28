@@ -121,7 +121,17 @@ info "Откат кода на коммит $BACKUP_COMMIT..."
 git reset --hard "$BACKUP_COMMIT"
 info "Код откачен ✓"
 
-# Восстановление БД
+# Остановка сервиса перед восстановлением БД
+info "Остановка сервиса ce-guests-back для безопасного восстановления БД..."
+if systemctl is-active --quiet ce-guests-back; then
+    sudo systemctl stop ce-guests-back
+    sleep 2  # Даем время сервису корректно остановиться
+    info "Сервис остановлен ✓"
+else
+    warn "Сервис уже остановлен"
+fi
+
+# Восстановление БД (пока сервис остановлен)
 info "Восстановление БД из бэкапа..."
 if [ -f "$DB_FILE" ]; then
     # Делаем бэкап текущей БД перед восстановлением
@@ -144,9 +154,9 @@ if [ "$CURRENT_MIGRATION" != "$HEAD_MIGRATION" ] && [ "$CURRENT_MIGRATION" != "n
     alembic downgrade "$HEAD_MIGRATION" 2>/dev/null || warn "Не удалось откатить миграции автоматически"
 fi
 
-# Перезапуск сервиса
-info "Перезапуск сервиса ce-guests-back..."
-sudo systemctl restart ce-guests-back
+# Запуск сервиса после восстановления
+info "Запуск сервиса ce-guests-back..."
+sudo systemctl start ce-guests-back
 
 # Ждем немного
 sleep 3
