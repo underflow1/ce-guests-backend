@@ -29,6 +29,7 @@ ENV/
 *.sqlite
 *.sqlite3
 *.sql
+backups/
 
 # Environment
 .env
