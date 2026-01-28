@@ -61,8 +61,8 @@ source venv/bin/activate
 CURRENT_MIGRATION=$(alembic current 2>/dev/null | grep -o '[a-f0-9]\{12\}' || echo "none")
 info "Текущая версия миграций: $CURRENT_MIGRATION"
 
-# Сохраняем текущий коммит для метаданных
-CURRENT_COMMIT=$(git rev-parse HEAD)
+# Сохраняем текущий коммит ДО обновления (для отката)
+COMMIT_BEFORE_UPDATE=$(git rev-parse HEAD)
 
 # Флаг что сервис был остановлен (для восстановления при ошибке)
 SERVICE_WAS_RUNNING=false
@@ -99,8 +99,9 @@ if [ -f "$DB_FILE" ]; then
     cp "$DB_FILE" "$BACKUP_FILE"
     
     # Сохраняем метаданные обновления в один файл (перезаписывается при каждом обновлении)
+    # COMMIT - это коммит ДО обновления, на который нужно откатиться
     META_FILE="$REPO_PATH/.update_meta"
-    echo "COMMIT=$CURRENT_COMMIT" > "$META_FILE"
+    echo "COMMIT=$COMMIT_BEFORE_UPDATE" > "$META_FILE"
     echo "TIMESTAMP=$TIMESTAMP" >> "$META_FILE"
     echo "BRANCH=$CURRENT_BRANCH" >> "$META_FILE"
     echo "BACKUP_FILE=$(basename "$BACKUP_FILE")" >> "$META_FILE"
@@ -115,7 +116,7 @@ if [ -f "$DB_FILE" ]; then
     warn "=========================================="
     warn "./scripts/rollback.sh"
     warn "Или вручную:"
-    warn "  git reset --hard $CURRENT_COMMIT"
+    warn "  git reset --hard $COMMIT_BEFORE_UPDATE"
     warn "  cp $BACKUP_FILE $DB_FILE"
     warn "  sudo systemctl restart ce-guests-back"
     warn "=========================================="

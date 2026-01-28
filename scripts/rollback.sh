@@ -40,14 +40,32 @@ fi
 CURRENT_COMMIT=$(git rev-parse HEAD)
 info "Текущий коммит: $(git rev-parse --short HEAD)"
 
-# Проверяем что есть предыдущий коммит
-PREVIOUS_COMMIT=$(git rev-parse HEAD~1 2>/dev/null || echo "")
-if [ -z "$PREVIOUS_COMMIT" ]; then
-    error "Нет предыдущего коммита для отката!"
+# Читаем метаданные для определения коммита отката
+META_FILE="$REPO_PATH/.update_meta"
+if [ ! -f "$META_FILE" ]; then
+    error "Файл метаданных не найден: $META_FILE"
+    error "Невозможно определить коммит для отката"
     exit 1
 fi
 
-info "Предыдущий коммит: $(git rev-parse --short "$PREVIOUS_COMMIT")"
+source "$META_FILE"
+ROLLBACK_COMMIT="$COMMIT"
+
+# Проверяем что коммит для отката существует
+if ! git rev-parse --verify "$ROLLBACK_COMMIT" > /dev/null 2>&1; then
+    error "Коммит для отката не найден: $ROLLBACK_COMMIT"
+    exit 1
+fi
+
+info "Коммит для отката: $(git rev-parse --short "$ROLLBACK_COMMIT")"
+
+# Проверка идемпотентности: если уже откатились на нужный коммит, не делать ничего
+if [ "$CURRENT_COMMIT" = "$ROLLBACK_COMMIT" ]; then
+    info "Уже откачено на коммит из последнего обновления"
+    info "Текущий коммит: $(git rev-parse --short "$CURRENT_COMMIT")"
+    info "Откат не требуется (идемпотентность)"
+    exit 0
+fi
 
 # Находим последний бэкап
 BACKUP_DIR="$REPO_PATH/backups"
@@ -66,29 +84,12 @@ fi
 
 info "Последний бэкап: $(basename "$LAST_BACKUP")"
 
-# Проверка идемпотентности: если уже откатились на один коммит назад, не делать ничего
-META_FILE="$REPO_PATH/.update_meta"
-if [ -f "$META_FILE" ]; then
-    source "$META_FILE"
-    LAST_UPDATE_COMMIT="$COMMIT"
-    
-    # Если текущий HEAD уже на один коммит раньше последнего обновления, значит уже откатились
-    LAST_UPDATE_PARENT=$(git rev-parse "$LAST_UPDATE_COMMIT~1" 2>/dev/null || echo "")
-    if [ -n "$LAST_UPDATE_PARENT" ] && [ "$CURRENT_COMMIT" = "$LAST_UPDATE_PARENT" ]; then
-        info "Уже откачено на один коммит назад от последнего обновления"
-        info "Текущий коммит: $(git rev-parse --short "$CURRENT_COMMIT")"
-        info "Коммит последнего обновления: $(git rev-parse --short "$LAST_UPDATE_COMMIT")"
-        info "Откат не требуется (идемпотентность)"
-        exit 0
-    fi
-fi
-
 # Показываем что будет откачено
 echo ""
 warn "=========================================="
 warn "Будет выполнено:"
 warn "=========================================="
-warn "1. Откат кода на предыдущий коммит: $(git rev-parse --short "$PREVIOUS_COMMIT")"
+warn "1. Откат кода на коммит: $(git rev-parse --short "$ROLLBACK_COMMIT")"
 warn "2. Восстановление БД из: $(basename "$LAST_BACKUP")"
 warn "3. Перезапуск сервиса"
 warn "=========================================="
@@ -111,9 +112,9 @@ source venv/bin/activate
 # Получаем путь к БД
 DB_FILE=$(python3 -c "from app.config import settings; print(settings.DATABASE_URL.replace('sqlite:///', '').replace('sqlite:///./', ''))")
 
-# Откат кода на предыдущий коммит
-info "Откат кода на предыдущий коммит $PREVIOUS_COMMIT..."
-git reset --hard "$PREVIOUS_COMMIT"
+# Откат кода на коммит из метаданных (коммит ДО последнего обновления)
+info "Откат кода на коммит $ROLLBACK_COMMIT..."
+git reset --hard "$ROLLBACK_COMMIT"
 info "Код откачен ✓"
 
 # Остановка сервиса перед восстановлением БД
