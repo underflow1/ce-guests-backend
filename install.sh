@@ -310,60 +310,6 @@ fi
 step_progress_stop
 
 # ============================================================================
-# СОЗДАНИЕ ПЕРВОГО АДМИНИСТРАТОРА
-# ============================================================================
-
-step "Создание первого администратора"
-
-echo -ne "${BOLD}${YELLOW}Создать первого администратора сейчас? [Y/n]: ${NC}" >&2
-read -r CREATE_ADMIN <&3
-CREATE_ADMIN=${CREATE_ADMIN:-"Y"}
-
-if [[ "$CREATE_ADMIN" =~ ^[Yy]$ ]] || [ -z "$CREATE_ADMIN" ]; then
-    echo -ne "${BOLD}${YELLOW}Введите имя пользователя администратора: ${NC}" >&2
-    read -r ADMIN_USERNAME <&3
-    ADMIN_USERNAME=${ADMIN_USERNAME:-""}
-
-    if [ -z "$ADMIN_USERNAME" ]; then
-        step_progress_stop
-        error "Имя пользователя не может быть пустым"
-        exit 1
-    fi
-
-    echo -ne "${BOLD}${YELLOW}Введите пароль администратора: ${NC}" >&2
-    read -sp "" ADMIN_PASSWORD <&3
-    echo >&2
-
-    echo -ne "${BOLD}${YELLOW}Подтвердите пароль: ${NC}" >&2
-    read -sp "" ADMIN_PASSWORD_CONFIRM <&3
-    echo >&2
-
-    if [ "$ADMIN_PASSWORD" != "$ADMIN_PASSWORD_CONFIRM" ]; then
-        step_progress_stop
-        error "Пароли не совпадают!"
-        exit 1
-    fi
-
-    if [ -z "$ADMIN_PASSWORD" ]; then
-        step_progress_stop
-        error "Пароль не может быть пустым!"
-        exit 1
-    fi
-
-    if ! sudo -u "$REAL_USER" bash -c "cd $REPO_PATH && source venv/bin/activate && python3 scripts/create_admin.py --username '$ADMIN_USERNAME' --password '$ADMIN_PASSWORD'" 2>&1; then
-        step_progress_stop
-        error "Не удалось создать администратора"
-        exit 1
-    fi
-    step_done
-    info "Администратор '$ADMIN_USERNAME' создан"
-else
-    step_progress_stop
-    warn "Создание администратора пропущено"
-    info "Создайте администратора вручную: cd $REPO_PATH && source venv/bin/activate && python3 scripts/create_admin.py"
-fi
-
-# ============================================================================
 # СОЗДАНИЕ SYSTEMD СЕРВИСА
 # ============================================================================
 
@@ -430,11 +376,9 @@ echo ""
 echo -e "  ${BOLD}Домен фронтенда:${NC} $CORS_ORIGINS"
 echo -e "  ${BOLD}Бэкенд:${NC} http://$BACKEND_HOST:$BACKEND_PORT"
 echo -e "  ${BOLD}Директория проекта:${NC} $REPO_PATH"
-if [ -n "${ADMIN_USERNAME:-}" ]; then
-    echo -e "  ${BOLD}Администратор:${NC} $ADMIN_USERNAME"
-else
-    echo -e "  ${BOLD}Администратор:${NC} не создан (создайте вручную)"
-fi
+echo ""
+echo -e "  ${BOLD}Важно:${NC} Создайте первого администратора:"
+echo -e "    ${CYAN}cd $REPO_PATH && source venv/bin/activate && python3 scripts/create_admin.py${NC}"
 echo ""
 echo -e "  ${BOLD}Полезные команды:${NC}"
 echo -e "    Статус сервиса:  ${CYAN}sudo systemctl status $SERVICE_NAME${NC}"
