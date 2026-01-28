@@ -64,23 +64,6 @@ info "Текущая версия миграций: $CURRENT_MIGRATION"
 # Сохраняем текущий коммит ДО обновления (для отката)
 COMMIT_BEFORE_UPDATE=$(git rev-parse HEAD)
 
-# Проверка: если уже обновлялись (текущий HEAD совпадает с коммитом из метаданных), ошибка
-META_FILE="$REPO_PATH/.update_meta"
-if [ -f "$META_FILE" ]; then
-    source "$META_FILE"
-    LAST_UPDATE_COMMIT="$COMMIT"
-    
-    # Если текущий HEAD равен коммиту из метаданных, значит уже обновлялись после последнего сохранения метаданных
-    if [ "$COMMIT_BEFORE_UPDATE" = "$LAST_UPDATE_COMMIT" ]; then
-        error "Обнаружено повторное обновление!"
-        error "Текущий коммит: $(git rev-parse --short "$COMMIT_BEFORE_UPDATE")"
-        error "Коммит из метаданных: $(git rev-parse --short "$LAST_UPDATE_COMMIT")"
-        error "Метаданные будут перезаписаны, откат станет невозможен!"
-        error "Обновление прервано"
-        exit 1
-    fi
-fi
-
 # Флаг что сервис был остановлен (для восстановления при ошибке)
 SERVICE_WAS_RUNNING=false
 
@@ -146,6 +129,24 @@ info "Обновление кода из репозитория..."
 git fetch origin
 LOCAL_COMMIT=$(git rev-parse HEAD)
 REMOTE_COMMIT=$(git rev-parse origin/main)
+
+# Проверка: если уже обновлялись (текущий HEAD совпадает с коммитом из метаданных), ошибка
+# Делаем проверку ПОСЛЕ git fetch, чтобы иметь актуальное состояние
+META_FILE="$REPO_PATH/.update_meta"
+if [ -f "$META_FILE" ]; then
+    source "$META_FILE"
+    LAST_UPDATE_COMMIT="$COMMIT"
+    
+    # Если текущий HEAD равен коммиту из метаданных, значит уже обновлялись после последнего сохранения метаданных
+    if [ "$LOCAL_COMMIT" = "$LAST_UPDATE_COMMIT" ]; then
+        error "Обнаружено повторное обновление!"
+        error "Текущий коммит: $(git rev-parse --short "$LOCAL_COMMIT")"
+        error "Коммит из метаданных: $(git rev-parse --short "$LAST_UPDATE_COMMIT")"
+        error "Метаданные будут перезаписаны, откат станет невозможен!"
+        error "Обновление прервано"
+        exit 1
+    fi
+fi
 
 if [ "$LOCAL_COMMIT" = "$REMOTE_COMMIT" ]; then
     warn "Локальный код уже актуален (нет новых коммитов)"
