@@ -20,6 +20,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Получаем connection для работы с БД
+    connection = op.get_bind()
+    
     # Вставляем все права (permissions)
     permissions = [
         ("dd25e9cd-fb28-42ef-a203-a180416faac4", "can_view", "Просмотр записей", "Просматривать записи"),
@@ -36,7 +39,7 @@ def upgrade() -> None:
     ]
     
     for perm_id, code, name, description in permissions:
-        op.execute(
+        connection.execute(
             sa.text("""
                 INSERT OR IGNORE INTO permissions (id, code, name, description)
                 VALUES (:id, :code, :name, :description)
@@ -51,7 +54,7 @@ def upgrade() -> None:
     ]
     
     for role_id, name, description, interface_type, created_at in roles:
-        op.execute(
+        connection.execute(
             sa.text("""
                 INSERT OR IGNORE INTO roles (id, name, description, interface_type, created_at)
                 VALUES (:id, :name, :description, :interface_type, :created_at)
@@ -87,7 +90,7 @@ def upgrade() -> None:
     all_role_permissions = user_role_permissions + guard_role_permissions
     for perm_id, role_id in all_role_permissions:
         rp_id = str(uuid.uuid4())
-        op.execute(
+        connection.execute(
             sa.text("""
                 INSERT OR IGNORE INTO role_permissions (id, role_id, permission_id)
                 VALUES (:id, :role_id, :permission_id)
