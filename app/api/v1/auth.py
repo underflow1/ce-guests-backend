@@ -4,12 +4,19 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.user import User
-from app.schemas.auth import LoginRequest, LoginResponse
+from app.schemas.auth import LoginRequest, LoginResponse, RefreshRequest, RefreshResponse, LogoutRequest
 from app.schemas.user import UserResponse
+from app.config import settings
 from app.services.auth import (
     verify_password,
     create_access_token,
     get_current_timestamp,
+    generate_refresh_token,
+    create_refresh_token_db,
+    cleanup_expired_tokens,
+    find_refresh_token,
+    find_refresh_token_by_token,
+    revoke_refresh_token,
 )
 from app.api.deps import get_current_user, get_user_permissions, get_user_ui_permissions
 
@@ -39,8 +46,17 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
             detail="Пользователь деактивирован",
         )
     
-    # Создаем токен
+    # Создаем access token
     access_token = create_access_token(data={"sub": user.id})
+    
+    # Генерируем refresh token
+    refresh_token = generate_refresh_token()
+    
+    # Очищаем старые истекшие токены пользователя
+    cleanup_expired_tokens(db, user_id=user.id)
+    
+    # Сохраняем refresh token в БД
+    create_refresh_token_db(db, user_id=user.id, refresh_token=refresh_token)
     
     logger.info(f"Успешный вход пользователя: '{user.username}' (ID: {user.id})")
     
@@ -64,9 +80,14 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
             "interface_type": user_with_role.role.interface_type,
         }
     
+    # Вычисляем expires_in в секундах (5 минут = 300 секунд)
+    expires_in = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    
     return LoginResponse(
         access_token=access_token,
+        refresh_token=refresh_token,
         token_type="bearer",
+        expires_in=expires_in,
         user=UserResponse(
             id=user_with_role.id,
             username=user_with_role.username,
@@ -80,6 +101,73 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
             created_at=user_with_role.created_at,
         ),
     )
+
+
+@router.post("/refresh", response_model=RefreshResponse)
+def refresh_token(refresh_data: RefreshRequest, db: Session = Depends(get_db)):
+    """Обновление access token с помощью refresh token"""
+    # Ищем refresh token в БД
+    refresh_token_obj = find_refresh_token_by_token(db, refresh_data.refresh_token)
+    
+    if not refresh_token_obj:
+        logger.warning("Попытка использовать невалидный или истекший refresh token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Невалидный или истекший refresh token",
+        )
+    
+    user_id = refresh_token_obj.user_id
+    
+    # Проверяем что пользователь активен
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not user.is_active:
+        logger.warning(f"Попытка refresh токена для неактивного пользователя: {user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Пользователь деактивирован",
+        )
+    
+    # Инвалидируем старый refresh token (rotation)
+    revoke_refresh_token(db, refresh_token_obj)
+    
+    # Очищаем истекшие токены пользователя
+    cleanup_expired_tokens(db, user_id=user_id)
+    
+    # Создаем новый access token
+    access_token = create_access_token(data={"sub": user_id})
+    
+    # Генерируем новый refresh token
+    new_refresh_token = generate_refresh_token()
+    
+    # Сохраняем новый refresh token в БД
+    create_refresh_token_db(db, user_id=user_id, refresh_token=new_refresh_token)
+    
+    logger.info(f"Обновлен токен для пользователя ID: {user_id}")
+    
+    expires_in = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    
+    return RefreshResponse(
+        access_token=access_token,
+        refresh_token=new_refresh_token,
+        token_type="bearer",
+        expires_in=expires_in,
+    )
+
+
+@router.post("/logout")
+def logout(logout_data: LogoutRequest, db: Session = Depends(get_db)):
+    """Выход из системы - инвалидация refresh token"""
+    # Ищем refresh token в БД
+    refresh_token_obj = find_refresh_token_by_token(db, logout_data.refresh_token)
+    
+    if refresh_token_obj:
+        # Инвалидируем токен
+        revoke_refresh_token(db, refresh_token_obj)
+        logger.info(f"Токен отозван для пользователя ID: {refresh_token_obj.user_id}")
+        return {"message": "Успешный выход из системы"}
+    else:
+        # Если токен не найден, все равно возвращаем успех (idempotent)
+        return {"message": "Успешный выход из системы"}
 
 
 @router.get("/me", response_model=UserResponse)

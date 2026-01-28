@@ -280,7 +280,8 @@ DATABASE_URL=sqlite:///./ce_guests.db
 # JWT
 SECRET_KEY=$SECRET_KEY
 ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=1440
+ACCESS_TOKEN_EXPIRE_MINUTES=5
+REFRESH_TOKEN_EXPIRE_HOURS=1
 
 # CORS
 CORS_ORIGINS=$CORS_ORIGINS
@@ -310,7 +311,7 @@ fi
 step_progress_stop
 
 step_progress "Создание таблиц БД (если не созданы)"
-if ! sudo -u "$REAL_USER" bash -c "cd $REPO_PATH && source venv/bin/activate && python3 -c 'from app.database import Base, engine; from app.models import User, Entry, Role, Permission, RolePermission; Base.metadata.create_all(engine)'" 2>&1; then
+if ! sudo -u "$REAL_USER" bash -c "cd $REPO_PATH && source venv/bin/activate && python3 -c 'from app.database import Base, engine; from app.models import User, Entry, Role, Permission, RolePermission, RefreshToken; Base.metadata.create_all(engine)'" 2>&1; then
     step_progress_stop
     error "Не удалось создать таблицы БД"
     exit 1
