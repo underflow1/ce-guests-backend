@@ -64,6 +64,9 @@ info "Текущая версия миграций: $CURRENT_MIGRATION"
 # Сохраняем текущий коммит ДО обновления (для отката)
 COMMIT_BEFORE_UPDATE=$(git rev-parse HEAD)
 
+# Определяем путь к файлу метаданных
+META_FILE="$REPO_PATH/.update_meta"
+
 # Флаг что сервис был остановлен (для восстановления при ошибке)
 SERVICE_WAS_RUNNING=false
 
@@ -132,7 +135,6 @@ REMOTE_COMMIT=$(git rev-parse origin/main)
 
 # Проверка: если уже обновлялись (текущий HEAD совпадает с коммитом из метаданных), ошибка
 # Делаем проверку ПОСЛЕ git fetch, чтобы иметь актуальное состояние
-META_FILE="$REPO_PATH/.update_meta"
 if [ -f "$META_FILE" ]; then
     source "$META_FILE"
     LAST_UPDATE_COMMIT="$COMMIT"
