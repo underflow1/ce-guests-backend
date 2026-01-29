@@ -6,7 +6,7 @@ NOTIFICATION_TYPES = [
     {"code": "entry_created", "title": "Создание записи"},
     {"code": "entry_updated", "title": "Обновление записи"},
     {"code": "entry_completed", "title": "Гость отмечен как пришедший"},
-    {"code": "entry_uncompleted", "title": "Гость отмечен как не пришедший"},
+    {"code": "entry_uncompleted", "title": "Снята отметка о приходе"},
     {"code": "entry_moved", "title": "Перенос записи"},
     {"code": "entry_deleted", "title": "Удаление записи"},
     {"code": "entries_deleted_all", "title": "Удаление всех записей"},

@@ -45,23 +45,23 @@ def get_notification_title(event_type: str) -> str:
 
 def format_notification_message(event_type: str, payload: Dict[str, Any]) -> str:
     title = get_notification_title(event_type)
-    lines = [f"Событие: {title}"]
+    lines = [f"*{title}*"]
 
     change = payload.get("change") if isinstance(payload, dict) else None
     if isinstance(change, dict):
-        actor = change.get("actor")
-        if actor:
-            lines.append(f"Действие: {actor}")
         entry = change.get("entry")
         if isinstance(entry, dict):
             if entry.get("name"):
-                lines.append(f"Запись: {entry.get('name')}")
+                lines.append(f"{entry.get('name')}")
             if entry.get("responsible"):
                 lines.append(f"Ответственный: {entry.get('responsible')}")
             if entry.get("datetime"):
-                lines.append(f"Дата/время: {entry.get('datetime')}")
+                lines.append(f"{entry.get('datetime')}")
         if "deleted_count" in change:
             lines.append(f"Удалено записей: {change.get('deleted_count')}")
+        actor = change.get("actor")
+        if actor:
+            lines.append(f"_{actor}_")
 
     return "\n".join(lines)
 
