@@ -83,7 +83,7 @@ def get_user_permissions(user: User) -> Set[str]:
         return {
             # Бэкенд-права
             "can_view", "can_add", "can_edit_entry", "can_delete_entry",
-            "can_mark_completed", "can_unmark_completed",
+            "can_mark_completed", "can_unmark_completed", "can_move_entry",
             # Фронтенд-права
             "can_move_ui", "can_mark_completed_ui", "can_unmark_completed_ui",
             "can_edit_entry_ui", "can_delete_ui"
