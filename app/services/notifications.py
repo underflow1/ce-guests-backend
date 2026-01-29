@@ -49,6 +49,9 @@ def format_notification_message(event_type: str, payload: Dict[str, Any]) -> str
 
     change = payload.get("change") if isinstance(payload, dict) else None
     if isinstance(change, dict):
+        actor = change.get("actor")
+        if actor:
+            lines.append(f"Действие: {actor}")
         entry = change.get("entry")
         if isinstance(entry, dict):
             if entry.get("name"):
@@ -67,12 +70,18 @@ def send_max_via_green_api(url: str, chat_id: str, message: str) -> None:
     payload = {
         "chatId": chat_id,
         "message": message,
-        "customPreview": {},
     }
     headers = {"Content-Type": "application/json"}
     try:
         response = httpx.post(url, json=payload, headers=headers, timeout=10)
         response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        response_text = exc.response.text if exc.response is not None else ""
+        logger.error(
+            "Ошибка отправки уведомления через max_via_green_api: %s",
+            response_text,
+            exc_info=True,
+        )
     except Exception:
         logger.exception("Ошибка отправки уведомления через max_via_green_api")
 
@@ -87,6 +96,13 @@ def send_telegram(bot_token: str, chat_id: str, message: str) -> None:
     try:
         response = httpx.post(url, json=payload, timeout=10)
         response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        response_text = exc.response.text if exc.response is not None else ""
+        logger.error(
+            "Ошибка отправки уведомления через telegram: %s",
+            response_text,
+            exc_info=True,
+        )
     except Exception:
         logger.exception("Ошибка отправки уведомления через telegram")
 
