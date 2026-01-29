@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -61,6 +62,7 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
     Единая функция для получения данных недели (entries, reference_dates, calendar_structure)
     Используется в GET /entries и для формирования WebSocket событий
     """
+    start_time = time.time()
     try:
         # Определяем текущую дату
         if today:
@@ -70,11 +72,17 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
             reference_date = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
         
         # Получаем структуру текущей недели
+        calendar_start = time.time()
         calendar_structure = get_week_structure(reference_date)
+        calendar_time = time.time() - calendar_start
+        logger.debug(f"get_week_structure заняло: {calendar_time:.3f}с")
         
         # Находим предыдущий и следующий рабочие дни
+        workdays_start = time.time()
         previous_workday = get_previous_workday(reference_date)
         next_workday = get_next_workday(reference_date)
+        workdays_time = time.time() - workdays_start
+        logger.debug(f"get_workdays (previous/next) заняло: {workdays_time:.3f}с")
         
         # Определяем диапазон дат для получения записей
         # Текущая неделя (понедельник - воскресенье)
@@ -91,6 +99,7 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
         date_to_str = week_end.replace(hour=23, minute=59, second=59, microsecond=999999).isoformat()
         
         # Получаем записи в диапазоне дат, которые не удалены
+        db_start = time.time()
         entries = db.query(Entry).filter(
             and_(
                 Entry.datetime >= date_from_str,
@@ -98,6 +107,8 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
                 Entry.deleted_at.is_(None)
             )
         ).order_by(Entry.datetime).all()
+        db_time = time.time() - db_start
+        logger.debug(f"DB запрос занял: {db_time:.3f}с")
         
         # Преобразуем calendar_structure в список CalendarDay
         calendar_days = [
@@ -124,6 +135,9 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
             ).dict()
             for entry in entries
         ]
+        
+        total_time = time.time() - start_time
+        logger.info(f"get_entries_data выполнено за {total_time:.3f}с (calendar: {calendar_time:.3f}с, workdays: {workdays_time:.3f}с, DB: {db_time:.3f}с)")
         
         return {
             "entries": entries_list,
