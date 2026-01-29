@@ -48,3 +48,20 @@ def broadcast_entry_event(payload: dict) -> None:
         anyio.from_thread.run(manager.broadcast, payload)
     except RuntimeError:
         logger.debug("WS broadcast skipped: no running event loop")
+
+
+def broadcast_entry_event_with_data(event_type: str, change_data: dict, data: dict) -> None:
+    """
+    Отправка WebSocket события с полной структурой данных недели
+    
+    Args:
+        event_type: Тип события (entry_created, entry_updated, etc.)
+        change_data: Данные об изменении (для поля change)
+        data: Полные данные недели (entries, reference_dates, calendar_structure)
+    """
+    payload = {
+        "type": event_type,
+        "data": data,
+        "change": change_data,
+    }
+    broadcast_entry_event(payload)
