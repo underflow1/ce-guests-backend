@@ -39,20 +39,12 @@ def get_next_workday(start_date: datetime) -> datetime:
     return current
 
 
-def get_next_monday(start_date: datetime) -> datetime:
-    """Получить следующий рабочий понедельник от указанной даты"""
-    # Находим следующий понедельник
-    days_ahead = 7 - start_date.weekday()  # Дней до следующего понедельника
-    if days_ahead == 7:
-        # Если сегодня понедельник, проверяем следующий понедельник
-        days_ahead = 7
-    next_monday = start_date + timedelta(days=days_ahead)
-    
-    # Если следующий понедельник не рабочий, ищем следующий рабочий понедельник
-    while not is_workday(next_monday):
-        next_monday += timedelta(days=7)
-    
-    return next_monday
+def get_previous_workday(start_date: datetime) -> datetime:
+    """Получить предыдущий рабочий день от указанной даты"""
+    current = start_date - timedelta(days=1)
+    while not is_workday(current):
+        current -= timedelta(days=1)
+    return current
 
 
 def format_date(date: datetime) -> str:
@@ -60,29 +52,28 @@ def format_date(date: datetime) -> str:
     return date.strftime("%Y-%m-%d")
 
 
-def get_date_range_data(today: Optional[datetime] = None) -> dict:
+def get_week_start(date: datetime) -> datetime:
+    """Получить понедельник недели для указанной даты"""
+    days_since_monday = date.weekday()  # 0 = понедельник, 6 = воскресенье
+    monday = date - timedelta(days=days_since_monday)
+    return monday.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def get_week_structure(date: datetime) -> list[dict]:
     """
-    Получить данные о диапазоне дат для фронта
-    Возвращает: today, tomorrow, next_monday, date_from, date_to
+    Получить структуру недели (понедельник - воскресенье) для указанной даты
+    Возвращает список из 7 дней с полями: date, weekday, is_workday
     """
-    if today is None:
-        today = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-    else:
-        # Убеждаемся что дата в нужном часовом поясе
-        if today.tzinfo is None:
-            today = tz.localize(today)
-        else:
-            today = today.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = get_week_start(date)
+    weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     
-    tomorrow = get_next_workday(today)
-    next_monday = get_next_monday(today)
-    date_from = today
-    date_to = today + timedelta(days=8)  # От сегодня + 8 дней включительно
+    structure = []
+    for i in range(7):
+        current_date = week_start + timedelta(days=i)
+        structure.append({
+            "date": format_date(current_date),
+            "weekday": weekdays[i],
+            "is_workday": is_workday(current_date),
+        })
     
-    return {
-        "today": format_date(today),
-        "tomorrow": format_date(tomorrow),
-        "next_monday": format_date(next_monday),
-        "date_from": format_date(date_from),
-        "date_to": format_date(date_to),
-    }
+    return structure

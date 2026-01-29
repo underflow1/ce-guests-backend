@@ -14,10 +14,19 @@ from app.schemas.entry import (
     EntryResponse,
     EntriesListResponse,
     ResponsibleAutocompleteResponse,
+    ReferenceDates,
+    CalendarDay,
 )
 from app.api.deps import get_current_user, get_current_active_admin, get_user_permissions, require_permission
 from app.services.auth import get_current_timestamp
 from app.services.entry_events import broadcast_entry_event
+from app.services.workdays import (
+    get_previous_workday,
+    get_next_workday,
+    get_week_structure,
+    get_week_start,
+    format_date,
+)
 from pytz import timezone
 from app.config import settings
 
@@ -48,22 +57,42 @@ def build_entry_response(entry: Entry) -> EntryResponse:
 
 @router.get("/entries", response_model=EntriesListResponse)
 def get_entries(
-    today: str = Query(..., description="Текущая дата в формате YYYY-MM-DD"),
+    today: str = Query(None, description="Текущая дата в формате YYYY-MM-DD (опционально)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("can_view")),
 ):
     """
-    Получить записи за период (от переданной даты + 8 дней)
+    Получить записи за текущую неделю + предыдущий рабочий день (если не в текущей неделе)
     Возвращает только не удаленные записи
     """
     try:
-        today_date = parse_date(today)
-        date_from = tz.localize(today_date.replace(hour=0, minute=0, second=0, microsecond=0))
-        date_to = date_from + timedelta(days=8)
+        # Определяем текущую дату
+        if today:
+            today_date = parse_date(today)
+            reference_date = tz.localize(today_date.replace(hour=0, minute=0, second=0, microsecond=0))
+        else:
+            reference_date = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Получаем структуру текущей недели
+        calendar_structure = get_week_structure(reference_date)
+        
+        # Находим предыдущий и следующий рабочие дни
+        previous_workday = get_previous_workday(reference_date)
+        next_workday = get_next_workday(reference_date)
+        
+        # Определяем диапазон дат для получения записей
+        # Текущая неделя (понедельник - воскресенье)
+        week_start = get_week_start(reference_date)
+        week_end = week_start + timedelta(days=6)
+        
+        # Добавляем предыдущий рабочий день, если он не в текущей неделе
+        date_from = week_start
+        if previous_workday < week_start:
+            date_from = previous_workday
         
         # Форматируем для фильтрации (datetime хранится как TEXT в ISO формате)
-        date_from_str = date_from.isoformat()
-        date_to_str = date_to.isoformat()
+        date_from_str = date_from.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        date_to_str = week_end.replace(hour=23, minute=59, second=59, microsecond=999999).isoformat()
         
         # Получаем записи в диапазоне дат, которые не удалены
         entries = db.query(Entry).filter(
@@ -73,6 +102,16 @@ def get_entries(
                 Entry.deleted_at.is_(None)
             )
         ).order_by(Entry.datetime).all()
+        
+        # Преобразуем calendar_structure в список CalendarDay
+        calendar_days = [
+            CalendarDay(
+                date=day["date"],
+                weekday=day["weekday"],
+                is_workday=day["is_workday"],
+            )
+            for day in calendar_structure
+        ]
         
         return EntriesListResponse(
             entries=[
@@ -89,10 +128,11 @@ def get_entries(
                 )
                 for entry in entries
             ],
-            date_range={
-                "from": today,
-                "to": date_to.strftime("%Y-%m-%d"),
-            },
+            reference_dates=ReferenceDates(
+                previous_workday=format_date(previous_workday),
+                next_workday=format_date(next_workday),
+            ),
+            calendar_structure=calendar_days,
         )
     except ValueError as e:
         raise HTTPException(

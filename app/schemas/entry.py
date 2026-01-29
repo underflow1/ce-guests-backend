@@ -43,9 +43,23 @@ class EntryResponse(EntryBase):
         from_attributes = True
 
 
+class CalendarDay(BaseModel):
+    """Модель для одного дня в структуре календаря"""
+    date: str  # YYYY-MM-DD
+    weekday: str  # Monday, Tuesday, Wednesday, etc.
+    is_workday: bool
+
+
+class ReferenceDates(BaseModel):
+    """Модель для ключевых дат (предыдущий и следующий рабочий день)"""
+    previous_workday: str  # YYYY-MM-DD
+    next_workday: str  # YYYY-MM-DD
+
+
 class EntriesListResponse(BaseModel):
     entries: list[EntryResponse]
-    date_range: dict[str, str]  # {"from": "YYYY-MM-DD", "to": "YYYY-MM-DD"}
+    reference_dates: ReferenceDates
+    calendar_structure: list[CalendarDay]
 
 
 class ResponsibleAutocompleteResponse(BaseModel):
