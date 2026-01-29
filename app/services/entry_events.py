@@ -5,6 +5,8 @@ import logging
 import anyio
 from fastapi import WebSocket
 
+from app.services.notifications import send_notifications_for_event
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,3 +67,4 @@ def broadcast_entry_event_with_data(event_type: str, change_data: dict, data: di
         "change": change_data,
     }
     broadcast_entry_event(payload)
+    send_notifications_for_event(event_type, payload)
