@@ -17,7 +17,9 @@ NOTIFICATION_TYPE_CODES = [item["code"] for item in NOTIFICATION_TYPES]
 
 class NotificationProviderMaxViaGreenApi(BaseModel):
     enabled: bool = False
-    url: Optional[str] = None
+    base_url: Optional[str] = None
+    instance_id: Optional[str] = None
+    api_token: Optional[str] = None
     chat_id: Optional[str] = None
 
 

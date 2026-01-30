@@ -64,10 +64,15 @@ def update_settings(
 
     # Валидация активных провайдеров
     max_provider = notifications.providers.max_via_green_api
-    if max_provider.enabled and (not max_provider.url or not max_provider.chat_id):
+    if max_provider.enabled and (
+        not max_provider.base_url
+        or not max_provider.instance_id
+        or not max_provider.api_token
+        or not max_provider.chat_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Для max_via_green_api обязательны url и chat_id",
+            detail="Для max_via_green_api обязательны base_url, instance_id, api_token и chat_id",
         )
 
     telegram_provider = notifications.providers.telegram

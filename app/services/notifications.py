@@ -66,7 +66,8 @@ def format_notification_message(event_type: str, payload: Dict[str, Any]) -> str
     return "\n".join(lines)
 
 
-def send_max_via_green_api(url: str, chat_id: str, message: str) -> None:
+def send_max_via_green_api(base_url: str, instance_id: str, api_token: str, chat_id: str, message: str) -> None:
+    url = f"{base_url.rstrip('/')}/waInstance{instance_id}/sendMessage/{api_token}"
     payload = {
         "chatId": chat_id,
         "message": message,
@@ -118,12 +119,16 @@ def send_notifications_for_event(event_type: str, payload: Dict[str, Any]) -> No
 
         max_provider = providers.get("max_via_green_api") or {}
         if max_provider.get("enabled"):
-            url = max_provider.get("url")
+            base_url = max_provider.get("base_url")
+            instance_id = max_provider.get("instance_id")
+            api_token = max_provider.get("api_token")
             chat_id = max_provider.get("chat_id")
-            if url and chat_id:
-                send_max_via_green_api(url, chat_id, message)
+            if base_url and instance_id and api_token and chat_id:
+                send_max_via_green_api(base_url, instance_id, api_token, chat_id, message)
             else:
-                logger.warning("max_via_green_api включен, но url/chat_id отсутствуют")
+                logger.warning(
+                    "max_via_green_api включен, но base_url/instance_id/api_token/chat_id отсутствуют"
+                )
 
         telegram_provider = providers.get("telegram") or {}
         if telegram_provider.get("enabled"):
