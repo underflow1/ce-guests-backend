@@ -56,3 +56,6 @@ dmypy.json
 
 # Logs
 *.log
+
+# Prompts
+prompts/

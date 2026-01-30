@@ -3,7 +3,7 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.api.v1 import auth, entries, users, roles
+from app.api.v1 import auth, entries, users, roles, settings as settings_router
 from app.api import ws
 from app.api.deps import get_current_user
 from app.models.user import User
@@ -31,6 +31,7 @@ app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(entries.router, prefix="/api/v1", tags=["entries"])
 app.include_router(users.router, prefix="/api/v1", tags=["users"])
 app.include_router(roles.router, prefix="/api/v1", tags=["roles"])
+app.include_router(settings_router.router, prefix="/api/v1", tags=["settings"])
 app.include_router(ws.router, tags=["ws"])
 
 

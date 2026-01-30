@@ -57,6 +57,12 @@ def build_entry_response(entry: Entry) -> EntryResponse:
     )
 
 
+def build_actor_display(user: User) -> str:
+    if user.full_name:
+        return user.full_name
+    return user.username
+
+
 def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
     """
     Единая функция для получения данных недели (entries, reference_dates, calendar_structure)
@@ -217,9 +223,10 @@ def create_entry(
     
     # Отправляем WebSocket событие с полными данными недели
     data = get_entries_data(db)
+    actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type="entry_created",
-        change_data={"entry": response.dict()},
+        change_data={"entry": response.dict(), "actor": actor},
         data=data,
     )
     
@@ -275,9 +282,10 @@ def update_entry(
     # Отправляем WebSocket событие entry_updated с полными данными недели
     # (PUT используется только для изменения name/responsible)
     data = get_entries_data(db)
+    actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type="entry_updated",
-        change_data={"entry": response.dict()},
+        change_data={"entry": response.dict(), "actor": actor},
         data=data,
     )
     
@@ -340,9 +348,10 @@ def mark_entry_completed(
     
     # Отправляем WebSocket событие с полными данными недели
     data = get_entries_data(db)
+    actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type=event_type,
-        change_data={"entry": response.dict()},
+        change_data={"entry": response.dict(), "actor": actor},
         data=data,
     )
     
@@ -406,9 +415,10 @@ def move_entry(
     
     # Отправляем WebSocket событие entry_moved с полными данными недели
     data = get_entries_data(db)
+    actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type="entry_moved",
-        change_data={"entry": response.dict()},
+        change_data={"entry": response.dict(), "actor": actor},
         data=data,
     )
     
@@ -436,9 +446,10 @@ def delete_all_entries(
     # Отправляем WebSocket событие entries_deleted_all с полными данными недели
     # (entries будет пустым массивом после удаления)
     data = get_entries_data(db)
+    actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type="entries_deleted_all",
-        change_data={"deleted_count": deleted_count},
+        change_data={"deleted_count": deleted_count, "actor": actor},
         data=data,
     )
     
@@ -481,9 +492,10 @@ def delete_entry(
     
     # Отправляем WebSocket событие entry_deleted с полными данными недели
     data = get_entries_data(db)
+    actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type="entry_deleted",
-        change_data={"entry": entry_snapshot.dict()},
+        change_data={"entry": entry_snapshot.dict(), "actor": actor},
         data=data,
     )
     
