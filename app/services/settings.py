@@ -32,6 +32,29 @@ def normalize_notifications(value: Any) -> Dict[str, Any]:
     return defaults
 
 
+def build_default_pass_integration() -> Dict[str, Any]:
+    return {
+        "enabled": False,
+        "base_url": None,
+        "login": None,
+        "password": None,
+    }
+
+
+def normalize_pass_integration(value: Any) -> Dict[str, Any]:
+    defaults = build_default_pass_integration()
+    if not isinstance(value, dict):
+        return defaults
+
+    for key in ["enabled", "base_url", "login", "password"]:
+        if key in value:
+            defaults[key] = value.get(key)
+
+    # Приводим enabled к bool на всякий случай
+    defaults["enabled"] = bool(defaults.get("enabled"))
+    return defaults
+
+
 def build_settings_metadata() -> Dict[str, Any]:
     return {
         "notifications": {

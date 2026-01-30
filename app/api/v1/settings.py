@@ -18,15 +18,17 @@ from app.services.auth import get_current_timestamp
 from app.services.settings import (
     build_default_notifications,
     normalize_notifications,
+    normalize_pass_integration,
     build_settings_metadata,
 )
 
 router = APIRouter()
 
 
-def build_settings_response(notifications: Dict[str, Any]) -> Dict[str, Any]:
+def build_settings_response(notifications: Dict[str, Any], pass_integration: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "notifications": notifications,
+        "pass_integration": pass_integration,
         "metadata": build_settings_metadata(),
     }
 
@@ -50,7 +52,12 @@ def get_settings(
             settings_data[record.key] = {}
 
     notifications = normalize_notifications(settings_data.get("notifications"))
-    return build_settings_response(notifications)
+    pass_integration = normalize_pass_integration(settings_data.get("pass_integration"))
+    return {
+        "notifications": notifications,
+        "pass_integration": pass_integration,
+        "metadata": build_settings_metadata(),
+    }
 
 
 @router.put("/settings", response_model=SettingsResponse, response_model_exclude_none=True)
@@ -61,6 +68,7 @@ def update_settings(
 ):
     """Обновить настройки (только для админов)"""
     notifications = payload.notifications
+    pass_integration = payload.pass_integration
 
     # Валидация активных провайдеров
     max_provider = notifications.providers.max_via_green_api
@@ -94,28 +102,62 @@ def update_settings(
             detail=f"Недопустимые типы уведомлений: {', '.join(invalid_types)}",
         )
 
+    # Валидация pass_integration
+    if pass_integration.enabled and (
+        not pass_integration.base_url
+        or not pass_integration.login
+        or not pass_integration.password
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Для pass_integration обязательны base_url, login и password",
+        )
+
     notifications_dict = notifications.dict(exclude_none=True)
     value = json.dumps(notifications_dict, ensure_ascii=False)
 
-    setting = db.query(Setting).filter(Setting.key == "notifications").first()
+    notifications_setting = db.query(Setting).filter(Setting.key == "notifications").first()
+    pass_setting = db.query(Setting).filter(Setting.key == "pass_integration").first()
     timestamp = get_current_timestamp()
 
-    if setting:
-        setting.value = value
-        setting.updated_at = timestamp
-        setting.updated_by = current_user.id
+    if notifications_setting:
+        notifications_setting.value = value
+        notifications_setting.updated_at = timestamp
+        notifications_setting.updated_by = current_user.id
     else:
-        setting = Setting(
+        notifications_setting = Setting(
             id=str(uuid.uuid4()),
             key="notifications",
             value=value,
             updated_at=timestamp,
             updated_by=current_user.id,
         )
-        db.add(setting)
+        db.add(notifications_setting)
+
+    pass_dict = pass_integration.dict(exclude_none=True)
+    pass_value = json.dumps(pass_dict, ensure_ascii=False)
+    if pass_setting:
+        pass_setting.value = pass_value
+        pass_setting.updated_at = timestamp
+        pass_setting.updated_by = current_user.id
+    else:
+        pass_setting = Setting(
+            id=str(uuid.uuid4()),
+            key="pass_integration",
+            value=pass_value,
+            updated_at=timestamp,
+            updated_by=current_user.id,
+        )
+        db.add(pass_setting)
 
     db.commit()
-    db.refresh(setting)
+    db.refresh(notifications_setting)
+    db.refresh(pass_setting)
 
     normalized = normalize_notifications(notifications_dict)
-    return build_settings_response(normalized)
+    normalized_pass = normalize_pass_integration(pass_dict)
+    return {
+        "notifications": normalized,
+        "pass_integration": normalized_pass,
+        "metadata": build_settings_metadata(),
+    }

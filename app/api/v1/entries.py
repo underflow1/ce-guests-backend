@@ -2,17 +2,21 @@ import logging
 import time
 from datetime import datetime, timedelta
 from typing import Optional
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
+from sqlalchemy.orm import joinedload
 
 from app.database import get_db
 from app.models.entry import Entry
+from app.models.pass_model import Pass
 from app.models.user import User
 from app.schemas.entry import (
     EntryCreate,
     EntryUpdate,
     EntryCompletedUpdate,
+    VisitCancelledUpdate,
     EntryMoveUpdate,
     EntryResponse,
     EntriesListResponse,
@@ -44,6 +48,13 @@ def parse_date(date_str: str) -> datetime:
 
 
 def build_entry_response(entry: Entry) -> EntryResponse:
+    pass_status = None
+    try:
+        if getattr(entry, "current_pass", None) is not None:
+            pass_status = entry.current_pass.status
+    except Exception:
+        pass_status = None
+
     return EntryResponse(
         id=entry.id,
         name=entry.name,
@@ -54,6 +65,9 @@ def build_entry_response(entry: Entry) -> EntryResponse:
         updated_at=entry.updated_at,
         updated_by=entry.updated_by,
         is_completed=bool(entry.is_completed),
+        is_cancelled=bool(getattr(entry, "is_cancelled", 0)),
+        current_pass_id=getattr(entry, "current_pass_id", None),
+        pass_status=pass_status,
     )
 
 
@@ -106,7 +120,7 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
         
         # Получаем записи в диапазоне дат, которые не удалены
         db_start = time.time()
-        entries = db.query(Entry).filter(
+        entries = db.query(Entry).options(joinedload(Entry.current_pass)).filter(
             and_(
                 Entry.datetime >= date_from_str,
                 Entry.datetime <= date_to_str,
@@ -138,6 +152,9 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
                 updated_at=entry.updated_at,
                 updated_by=entry.updated_by,
                 is_completed=bool(entry.is_completed),
+                is_cancelled=bool(getattr(entry, "is_cancelled", 0)),
+                current_pass_id=getattr(entry, "current_pass_id", None),
+                pass_status=(entry.current_pass.status if getattr(entry, "current_pass", None) is not None else None),
             ).dict()
             for entry in entries
         ]
@@ -219,6 +236,7 @@ def create_entry(
     
     logger.info(f"Создана запись: ID={entry.id}, name='{entry.name}', datetime={entry.datetime}, user='{current_user.username}'")
     
+    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
     
     # Отправляем WebSocket событие с полными данными недели
@@ -277,6 +295,7 @@ def update_entry(
     
     logger.info(f"Обновлена запись: ID={entry.id}, name='{entry.name}', datetime={entry.datetime}, user='{current_user.username}'")
     
+    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
     
     # Отправляем WebSocket событие entry_updated с полными данными недели
@@ -341,6 +360,7 @@ def mark_entry_completed(
         f"Обновлена отметка прихода: ID={entry.id}, is_completed={entry.is_completed}, user='{current_user.username}'"
     )
     
+    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
     
     # Определяем тип события в зависимости от значения is_completed
@@ -355,6 +375,176 @@ def mark_entry_completed(
         data=data,
     )
     
+    return response
+
+
+@router.patch("/entries/{entry_id}/cancelled", response_model=EntryResponse)
+def mark_visit_cancelled(
+    entry_id: str,
+    entry_data: VisitCancelledUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Отметить визит как отмененный (меняем только is_cancelled)"""
+    entry = db.query(Entry).filter(Entry.id == entry_id).first()
+
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
+
+    if entry.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись удалена")
+
+    permissions = get_user_permissions(current_user)
+    if entry_data.is_cancelled:
+        if "can_mark_cancelled" not in permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Недостаточно прав: требуется право 'can_mark_cancelled'",
+            )
+    else:
+        if "can_unmark_cancelled" not in permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Недостаточно прав: требуется право 'can_unmark_cancelled'",
+            )
+
+    timestamp = get_current_timestamp()
+
+    entry.is_cancelled = 1 if entry_data.is_cancelled else 0
+    entry.updated_at = timestamp
+    entry.updated_by = current_user.id
+
+    db.commit()
+    db.refresh(entry)
+
+    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry.id).first()
+    response = build_entry_response(entry)
+
+    event_type = "visit_cancelled" if entry_data.is_cancelled else "visit_uncancelled"
+    data = get_entries_data(db)
+    actor = build_actor_display(current_user)
+    broadcast_entry_event_with_data(
+        event_type=event_type,
+        change_data={"entry": response.dict(), "actor": actor},
+        data=data,
+    )
+
+    return response
+
+
+def _entry_date_from_datetime(datetime_str: str) -> str:
+    # ожидаем ISO: YYYY-MM-DDTHH:MM:SS
+    if "T" in datetime_str:
+        return datetime_str.split("T", 1)[0]
+    return datetime_str[:10]
+
+
+@router.put("/entries/{entry_id}/pass", response_model=EntryResponse)
+def order_pass(
+    entry_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Заказать пропуск (создаёт запись passes и назначает её текущей)"""
+    entry = db.query(Entry).filter(Entry.id == entry_id).first()
+
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
+    if entry.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись удалена")
+
+    permissions = get_user_permissions(current_user)
+    if "can_mark_pass" not in permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Недостаточно прав: требуется право 'can_mark_pass'",
+        )
+
+    timestamp = get_current_timestamp()
+    pass_date = _entry_date_from_datetime(entry.datetime)
+    request_id = str(uuid.uuid4())
+
+    # На текущем этапе внешнюю интеграцию не реализуем (external_id заполним позже)
+    new_pass = Pass(
+        id=str(uuid.uuid4()),
+        entry_id=entry.id,
+        date=pass_date,
+        request_id=request_id,
+        external_id=None,
+        status="ordered",
+        created_at=timestamp,
+        updated_at=None,
+        updated_by=None,
+    )
+    db.add(new_pass)
+    db.flush()
+
+    entry.current_pass_id = new_pass.id
+    entry.updated_at = timestamp
+    entry.updated_by = current_user.id
+
+    db.commit()
+
+    # Подгружаем current_pass для корректного ответа
+    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry.id).first()
+    response = build_entry_response(entry)
+
+    data = get_entries_data(db)
+    actor = build_actor_display(current_user)
+    broadcast_entry_event_with_data(
+        event_type="pass_ordered",
+        change_data={"entry": response.dict(), "actor": actor},
+        data=data,
+    )
+
+    return response
+
+
+@router.delete("/entries/{entry_id}/pass", response_model=EntryResponse)
+def revoke_pass(
+    entry_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Отозвать текущий пропуск (ставим status=revoked у текущей записи passes)"""
+    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry_id).first()
+
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
+    if entry.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись удалена")
+
+    permissions = get_user_permissions(current_user)
+    if "can_revoke_pass" not in permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Недостаточно прав: требуется право 'can_revoke_pass'",
+        )
+
+    if not entry.current_pass_id or entry.current_pass is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Текущий пропуск отсутствует")
+
+    timestamp = get_current_timestamp()
+    entry.current_pass.status = "revoked"
+    entry.current_pass.updated_at = timestamp
+    entry.current_pass.updated_by = current_user.id
+
+    entry.updated_at = timestamp
+    entry.updated_by = current_user.id
+
+    db.commit()
+
+    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry.id).first()
+    response = build_entry_response(entry)
+
+    data = get_entries_data(db)
+    actor = build_actor_display(current_user)
+    broadcast_entry_event_with_data(
+        event_type="pass_revoked",
+        change_data={"entry": response.dict(), "actor": actor},
+        data=data,
+    )
+
     return response
 
 
@@ -411,6 +601,7 @@ def move_entry(
         f"Перемещена запись: ID={entry.id}, datetime={entry.datetime}, user='{current_user.username}'"
     )
     
+    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
     
     # Отправляем WebSocket событие entry_moved с полными данными недели

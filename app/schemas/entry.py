@@ -33,6 +33,10 @@ class EntryCompletedUpdate(BaseModel):
     is_completed: bool
 
 
+class VisitCancelledUpdate(BaseModel):
+    is_cancelled: bool
+
+
 class EntryMoveUpdate(BaseModel):
     """Схема для перемещения записи через PATCH /move (только datetime)"""
     datetime: str  # ISO 8601 format: YYYY-MM-DDTHH:MM:SS
@@ -55,6 +59,9 @@ class EntryResponse(EntryBase):
     updated_at: Optional[str] = None
     updated_by: Optional[str] = None
     is_completed: bool
+    is_cancelled: bool = False
+    current_pass_id: Optional[str] = None
+    pass_status: Optional[str] = None
 
     class Config:
         from_attributes = True
