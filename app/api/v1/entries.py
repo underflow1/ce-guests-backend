@@ -109,14 +109,17 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
         week_start = get_week_start(reference_date)
         week_end = week_start + timedelta(days=6)
         
-        # Добавляем предыдущий рабочий день, если он не в текущей неделе
+        # Добавляем предыдущий/следующий рабочие дни, если они вне текущей недели
         date_from = week_start
+        date_to = week_end
         if previous_workday < week_start:
             date_from = previous_workday
+        if next_workday > week_end:
+            date_to = next_workday
         
         # Форматируем для фильтрации (datetime хранится как TEXT в ISO формате)
         date_from_str = date_from.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        date_to_str = week_end.replace(hour=23, minute=59, second=59, microsecond=999999).isoformat()
+        date_to_str = date_to.replace(hour=23, minute=59, second=59, microsecond=999999).isoformat()
         
         # Получаем записи в диапазоне дат, которые не удалены
         db_start = time.time()
@@ -183,7 +186,8 @@ def get_entries(
     current_user: User = Depends(require_permission("can_view")),
 ):
     """
-    Получить записи за текущую неделю + предыдущий рабочий день (если не в текущей неделе)
+    Получить записи за текущую неделю + соседние рабочие дни,
+    если они выходят за пределы недели
     Возвращает только не удаленные записи
     """
     try:
