@@ -12,6 +12,7 @@ from app.database import get_db
 from app.models.entry import Entry
 from app.models.pass_model import Pass
 from app.models.user import User
+from app.models.visit_goal import VisitGoal
 from app.schemas.entry import (
     EntryCreate,
     EntryUpdate,
@@ -68,6 +69,7 @@ def build_entry_response(entry: Entry) -> EntryResponse:
         is_cancelled=bool(getattr(entry, "is_cancelled", 0)),
         current_pass_id=getattr(entry, "current_pass_id", None),
         pass_status=pass_status,
+        visit_goal_ids=[goal.id for goal in (entry.visit_goals or [])],
     )
 
 
@@ -75,6 +77,32 @@ def build_actor_display(user: User) -> str:
     if user.full_name:
         return user.full_name
     return user.username
+
+
+def resolve_visit_goals(db: Session, entry: Optional[Entry], visit_goal_ids: list[str]) -> list[VisitGoal]:
+    if not visit_goal_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Нужно выбрать хотя бы одну цель визита",
+        )
+
+    unique_ids = list(dict.fromkeys(visit_goal_ids))
+    goals = db.query(VisitGoal).filter(VisitGoal.id.in_(unique_ids)).all()
+    if len(goals) != len(unique_ids):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Некоторые цели визита не найдены",
+        )
+
+    existing_ids = {goal.id for goal in (entry.visit_goals or [])} if entry else set()
+    inactive_new = [goal for goal in goals if not goal.is_active and goal.id not in existing_ids]
+    if inactive_new:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Выбраны неактивные цели визита",
+        )
+
+    return goals
 
 
 def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
@@ -123,7 +151,10 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
         
         # Получаем записи в диапазоне дат, которые не удалены
         db_start = time.time()
-        entries = db.query(Entry).options(joinedload(Entry.current_pass)).filter(
+        entries = db.query(Entry).options(
+            joinedload(Entry.current_pass),
+            joinedload(Entry.visit_goals),
+        ).filter(
             and_(
                 Entry.datetime >= date_from_str,
                 Entry.datetime <= date_to_str,
@@ -158,6 +189,7 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
                 is_cancelled=bool(getattr(entry, "is_cancelled", 0)),
                 current_pass_id=getattr(entry, "current_pass_id", None),
                 pass_status=(entry.current_pass.status if getattr(entry, "current_pass", None) is not None else None),
+                visit_goal_ids=[goal.id for goal in (entry.visit_goals or [])],
             ).dict()
             for entry in entries
         ]
@@ -224,6 +256,7 @@ def create_entry(
         )
     
     timestamp = get_current_timestamp()
+    visit_goals = resolve_visit_goals(db, None, entry_data.visit_goal_ids)
     
     entry = Entry(
         name=entry_data.name,
@@ -235,12 +268,17 @@ def create_entry(
     )
     
     db.add(entry)
+    db.flush()
+    entry.visit_goals = visit_goals
     db.commit()
     db.refresh(entry)
     
     logger.info(f"Создана запись: ID={entry.id}, name='{entry.name}', datetime={entry.datetime}, user='{current_user.username}'")
     
-    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry.id).first()
+    entry = db.query(Entry).options(
+        joinedload(Entry.current_pass),
+        joinedload(Entry.visit_goals),
+    ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
     
     # Отправляем WebSocket событие с полными данными недели
@@ -287,10 +325,12 @@ def update_entry(
         )
     
     timestamp = get_current_timestamp()
+    visit_goals = resolve_visit_goals(db, entry, entry_data.visit_goal_ids)
     
     # Обновляем только name и responsible (datetime и is_completed меняются через отдельные роуты)
     entry.name = entry_data.name
     entry.responsible = entry_data.responsible
+    entry.visit_goals = visit_goals
     entry.updated_at = timestamp
     entry.updated_by = current_user.id
     
@@ -299,7 +339,10 @@ def update_entry(
     
     logger.info(f"Обновлена запись: ID={entry.id}, name='{entry.name}', datetime={entry.datetime}, user='{current_user.username}'")
     
-    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry.id).first()
+    entry = db.query(Entry).options(
+        joinedload(Entry.current_pass),
+        joinedload(Entry.visit_goals),
+    ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
     
     # Отправляем WebSocket событие entry_updated с полными данными недели
@@ -364,7 +407,10 @@ def mark_entry_completed(
         f"Обновлена отметка прихода: ID={entry.id}, is_completed={entry.is_completed}, user='{current_user.username}'"
     )
     
-    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry.id).first()
+    entry = db.query(Entry).options(
+        joinedload(Entry.current_pass),
+        joinedload(Entry.visit_goals),
+    ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
     
     # Определяем тип события в зависимости от значения is_completed
@@ -421,7 +467,10 @@ def mark_visit_cancelled(
     db.commit()
     db.refresh(entry)
 
-    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry.id).first()
+    entry = db.query(Entry).options(
+        joinedload(Entry.current_pass),
+        joinedload(Entry.visit_goals),
+    ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
 
     event_type = "visit_cancelled" if entry_data.is_cancelled else "visit_uncancelled"
@@ -490,7 +539,10 @@ def order_pass(
     db.commit()
 
     # Подгружаем current_pass для корректного ответа
-    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry.id).first()
+    entry = db.query(Entry).options(
+        joinedload(Entry.current_pass),
+        joinedload(Entry.visit_goals),
+    ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
 
     data = get_entries_data(db)
@@ -511,7 +563,10 @@ def revoke_pass(
     current_user: User = Depends(get_current_user),
 ):
     """Отозвать текущий пропуск (ставим status=revoked у текущей записи passes)"""
-    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry_id).first()
+    entry = db.query(Entry).options(
+        joinedload(Entry.current_pass),
+        joinedload(Entry.visit_goals),
+    ).filter(Entry.id == entry_id).first()
 
     if not entry:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
@@ -538,7 +593,10 @@ def revoke_pass(
 
     db.commit()
 
-    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry.id).first()
+    entry = db.query(Entry).options(
+        joinedload(Entry.current_pass),
+        joinedload(Entry.visit_goals),
+    ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
 
     data = get_entries_data(db)
@@ -605,7 +663,10 @@ def move_entry(
         f"Перемещена запись: ID={entry.id}, datetime={entry.datetime}, user='{current_user.username}'"
     )
     
-    entry = db.query(Entry).options(joinedload(Entry.current_pass)).filter(Entry.id == entry.id).first()
+    entry = db.query(Entry).options(
+        joinedload(Entry.current_pass),
+        joinedload(Entry.visit_goals),
+    ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
     
     # Отправляем WebSocket событие entry_moved с полными данными недели
