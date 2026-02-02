@@ -3,6 +3,7 @@ from sqlalchemy import Column, Text, ForeignKey, Index, Integer
 from sqlalchemy.orm import relationship
 
 from app.database import Base
+from app.models.visit_goal import entry_visit_goals
 
 
 class Entry(Base):
@@ -31,6 +32,7 @@ class Entry(Base):
 
     passes = relationship("Pass", foreign_keys="Pass.entry_id", back_populates="entry")
     current_pass = relationship("Pass", foreign_keys=[current_pass_id])
+    visit_goals = relationship("VisitGoal", secondary=entry_visit_goals, back_populates="entries")
 
     # Index for datetime filtering
     __table_args__ = (

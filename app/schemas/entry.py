@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, validator
 
 
@@ -20,13 +20,26 @@ class EntryBase(BaseModel):
 
 
 class EntryCreate(EntryBase):
-    pass
+    visit_goal_ids: List[str]
+
+    @validator("visit_goal_ids")
+    def validate_visit_goal_ids(cls, v):
+        if not isinstance(v, list) or len(v) == 0:
+            raise ValueError("Нужно выбрать хотя бы одну цель визита")
+        return v
 
 
 class EntryUpdate(BaseModel):
     """Схема для обновления записи через PUT (только name и responsible)"""
     name: str
     responsible: Optional[str] = None
+    visit_goal_ids: List[str]
+
+    @validator("visit_goal_ids")
+    def validate_visit_goal_ids(cls, v):
+        if not isinstance(v, list) or len(v) == 0:
+            raise ValueError("Нужно выбрать хотя бы одну цель визита")
+        return v
 
 
 class EntryCompletedUpdate(BaseModel):
@@ -62,6 +75,7 @@ class EntryResponse(EntryBase):
     is_cancelled: bool = False
     current_pass_id: Optional[str] = None
     pass_status: Optional[str] = None
+    visit_goal_ids: List[str] = []
 
     class Config:
         from_attributes = True
