@@ -23,8 +23,8 @@ class RoleBase(BaseModel):
     @field_validator('interface_type')
     @classmethod
     def validate_interface_type(cls, v: str) -> str:
-        if v not in ["user", "guard", "user_new"]:
-            raise ValueError('interface_type должен быть "user", "guard" или "user_new"')
+        if v not in ["user", "duty_officer"]:
+            raise ValueError('interface_type должен быть "user" или "duty_officer"')
         return v
 
 
@@ -41,8 +41,8 @@ class RoleUpdate(BaseModel):
     @field_validator('interface_type')
     @classmethod
     def validate_interface_type(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and v not in ["user", "guard", "user_new"]:
-            raise ValueError('interface_type должен быть "user", "guard" или "user_new"')
+        if v is not None and v not in ["user", "duty_officer"]:
+            raise ValueError('interface_type должен быть "user" или "duty_officer"')
         return v
 
 
