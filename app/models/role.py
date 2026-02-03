@@ -11,7 +11,7 @@ class Role(Base):
     id = Column(Text, primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(Text, unique=True, nullable=False, index=True)
     description = Column(Text, nullable=True)
-    interface_type = Column(Text, nullable=False, default="user_new")  # "user_new" or "guard"
+    interface_type = Column(Text, nullable=False, default="user")  # "user" or "duty_officer"
     created_at = Column(Text, nullable=False)
 
     # Relationships
