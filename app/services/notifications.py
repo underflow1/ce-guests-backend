@@ -57,6 +57,11 @@ def format_notification_message(event_type: str, payload: Dict[str, Any]) -> str
                 lines.append(f"Ответственный: {entry.get('responsible')}")
             if entry.get("datetime"):
                 lines.append(f"{entry.get('datetime')}")
+            if entry.get("meeting_result_name"):
+                result_line = f"Результат: {entry.get('meeting_result_name')}"
+                if entry.get("meeting_result_reason_name"):
+                    result_line += f" ({entry.get('meeting_result_reason_name')})"
+                lines.append(result_line)
         if "deleted_count" in change:
             lines.append(f"Удалено записей: {change.get('deleted_count')}")
         actor = change.get("actor")

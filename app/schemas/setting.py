@@ -7,6 +7,7 @@ NOTIFICATION_TYPES = [
     {"code": "entry_updated", "title": "Обновление записи"},
     {"code": "entry_completed", "title": "Гость отмечен как пришедший"},
     {"code": "entry_uncompleted", "title": "Снята отметка о приходе"},
+    {"code": "meeting_result_set", "title": "Результат встречи установлен"},
     {"code": "visit_cancelled", "title": "Визит отменен"},
     {"code": "visit_uncancelled", "title": "Отмена визита снята"},
     {"code": "entry_moved", "title": "Перенос записи"},

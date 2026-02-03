@@ -7,6 +7,8 @@ class EntryBase(BaseModel):
     responsible: Optional[str] = None
     datetime: str  # ISO 8601 format: YYYY-MM-DDTHH:MM:SS
     is_completed: Optional[bool] = False
+    meeting_result_id: Optional[str] = None
+    meeting_result_reason_id: Optional[str] = None
 
     @validator("datetime")
     def validate_datetime(cls, v):
@@ -34,6 +36,8 @@ class EntryUpdate(BaseModel):
     name: str
     responsible: Optional[str] = None
     visit_goal_ids: List[str]
+    meeting_result_id: Optional[str] = None
+    meeting_result_reason_id: Optional[str] = None
 
     @validator("visit_goal_ids")
     def validate_visit_goal_ids(cls, v):
@@ -76,6 +80,8 @@ class EntryResponse(EntryBase):
     current_pass_id: Optional[str] = None
     pass_status: Optional[str] = None
     visit_goal_ids: List[str] = []
+    meeting_result_name: Optional[str] = None
+    meeting_result_reason_name: Optional[str] = None
 
     class Config:
         from_attributes = True
