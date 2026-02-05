@@ -12,11 +12,13 @@ class MeetingResultCreate(MeetingResultBase):
 
 class MeetingResultUpdate(BaseModel):
     name: Optional[str] = None
+    code: Optional[int] = None
     is_active: Optional[bool] = None
 
 
 class MeetingResultResponse(MeetingResultBase):
     id: str
+    code: Optional[int] = None
     is_active: bool
 
     class Config:

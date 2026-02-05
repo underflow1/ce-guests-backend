@@ -10,6 +10,7 @@ class MeetingResult(Base):
 
     id = Column(Text, primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(Text, unique=True, nullable=False)
+    code = Column(Integer, nullable=True)
     is_active = Column(Integer, nullable=False, default=1)
     created_at = Column(Text, nullable=False)
     updated_at = Column(Text, nullable=True)

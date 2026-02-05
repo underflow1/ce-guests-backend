@@ -81,6 +81,7 @@ class EntryResponse(EntryBase):
     pass_status: Optional[str] = None
     visit_goal_ids: List[str] = []
     meeting_result_name: Optional[str] = None
+    meeting_result_code: Optional[int] = None
     meeting_result_reason_name: Optional[str] = None
 
     class Config:

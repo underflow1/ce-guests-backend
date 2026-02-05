@@ -27,9 +27,15 @@ def get_active_meeting_results(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # Возвращаем только активные статусы с code > 0 (статусы с code <= 0 - служебные, не для выбора)
+    # Также исключаем статус "Встреча не состоялась" по названию (на случай если code еще не установлен)
     results = (
         db.query(MeetingResult)
-        .filter(MeetingResult.is_active == 1)
+        .filter(
+            MeetingResult.is_active == 1,
+            (MeetingResult.code.is_(None)) | (MeetingResult.code > 0),
+            func.lower(MeetingResult.name) != 'встреча не состоялась'
+        )
         .order_by(MeetingResult.name.asc())
         .all()
     )

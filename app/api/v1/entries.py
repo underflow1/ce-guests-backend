@@ -78,6 +78,7 @@ def build_entry_response(entry: Entry) -> EntryResponse:
         meeting_result_id=getattr(entry, "meeting_result_id", None),
         meeting_result_reason_id=getattr(entry, "meeting_result_reason_id", None),
         meeting_result_name=(meeting_result.name if meeting_result is not None else None),
+        meeting_result_code=(meeting_result.code if meeting_result is not None else None),
         meeting_result_reason_name=(meeting_result_reason.name if meeting_result_reason is not None else None),
     )
 
@@ -139,6 +140,14 @@ def resolve_meeting_result(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Выбран неактивный результат встречи",
+        )
+    
+    # Запрещаем выбирать статусы с code <= 0 как результат встречи
+    # (это служебные статусы, не результаты встречи)
+    if result.code is not None and result.code <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Этот статус нельзя выбрать как результат встречи. Используйте функцию отмены визита для отмены встречи.",
         )
 
     active_reasons = (
@@ -286,6 +295,7 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
                 meeting_result_id=getattr(entry, "meeting_result_id", None),
                 meeting_result_reason_id=getattr(entry, "meeting_result_reason_id", None),
                 meeting_result_name=(entry.meeting_result.name if getattr(entry, "meeting_result", None) is not None else None),
+                meeting_result_code=(entry.meeting_result.code if getattr(entry, "meeting_result", None) is not None else None),
                 meeting_result_reason_name=(
                     entry.meeting_result_reason.name
                     if getattr(entry, "meeting_result_reason", None) is not None
