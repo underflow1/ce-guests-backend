@@ -6,9 +6,6 @@ class EntryBase(BaseModel):
     name: str
     responsible: Optional[str] = None
     datetime: str  # ISO 8601 format: YYYY-MM-DDTHH:MM:SS
-    is_completed: Optional[bool] = False
-    meeting_result_id: Optional[str] = None
-    meeting_result_reason_id: Optional[str] = None
 
     @validator("datetime")
     def validate_datetime(cls, v):
@@ -32,12 +29,10 @@ class EntryCreate(EntryBase):
 
 
 class EntryUpdate(BaseModel):
-    """Схема для обновления записи через PUT (только name и responsible)"""
+    """Схема для обновления исходных полей записи (детали визита)"""
     name: str
     responsible: Optional[str] = None
     visit_goal_ids: List[str]
-    meeting_result_id: Optional[str] = None
-    meeting_result_reason_id: Optional[str] = None
 
     @validator("visit_goal_ids")
     def validate_visit_goal_ids(cls, v):
@@ -46,12 +41,31 @@ class EntryUpdate(BaseModel):
         return v
 
 
+class EntryDetailsUpdate(BaseModel):
+    """Атомарное обновление деталей визита (только для черновика)"""
+    name: str
+    responsible: Optional[str] = None
+    visit_goal_ids: List[str]
+
+    @validator("visit_goal_ids")
+    def validate_visit_goal_ids(cls, v):
+        if not isinstance(v, list) or len(v) == 0:
+            raise ValueError("Нужно выбрать хотя бы одну цель визита")
+        return v
+
+
+class EntryMeetingResultUpdate(BaseModel):
+    """Атомарная установка/смена результата встречи"""
+    meeting_result_id: str
+    meeting_result_reason_id: Optional[str] = None
+
+
 class EntryCompletedUpdate(BaseModel):
-    is_completed: bool
+    completed: bool
 
 
 class VisitCancelledUpdate(BaseModel):
-    is_cancelled: bool
+    cancelled: bool
 
 
 class EntryMoveUpdate(BaseModel):
@@ -75,13 +89,13 @@ class EntryResponse(EntryBase):
     created_at: str
     updated_at: Optional[str] = None
     updated_by: Optional[str] = None
-    is_completed: bool
-    is_cancelled: bool = False
+    state: int = 10
     current_pass_id: Optional[str] = None
     pass_status: Optional[str] = None
     visit_goal_ids: List[str] = []
     meeting_result_name: Optional[str] = None
     meeting_result_code: Optional[int] = None
+    meeting_result_reason_id: Optional[str] = None
     meeting_result_reason_name: Optional[str] = None
 
     class Config:

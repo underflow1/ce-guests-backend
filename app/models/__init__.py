@@ -9,6 +9,7 @@ from app.models.pass_model import Pass
 from app.models.visit_goal import VisitGoal
 from app.models.meeting_result import MeetingResult
 from app.models.meeting_result_reason import MeetingResultReason
+from app.models.entry_meeting_reason import EntryMeetingReason
 
 __all__ = [
     "User",
@@ -22,4 +23,5 @@ __all__ = [
     "VisitGoal",
     "MeetingResult",
     "MeetingResultReason",
+    "EntryMeetingReason",
 ]

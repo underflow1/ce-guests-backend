@@ -17,7 +17,6 @@ class MeetingResult(Base):
     updated_by = Column(Text, ForeignKey("users.id"), nullable=True)
 
     reasons = relationship("MeetingResultReason", back_populates="result")
-    entries = relationship("Entry", back_populates="meeting_result")
 
     __table_args__ = (
         UniqueConstraint("name", name="uq_meeting_results_name"),

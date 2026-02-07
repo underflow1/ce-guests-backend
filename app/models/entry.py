@@ -19,10 +19,9 @@ class Entry(Base):
     updated_by = Column(Text, ForeignKey("users.id"), nullable=True)
     deleted_at = Column(Text, nullable=True)  # ISO timestamp for soft delete
     deleted_by = Column(Text, ForeignKey("users.id"), nullable=True)
-    is_completed = Column(Integer, nullable=False, default=0)  # 0/1 для отметки принятого гостя
-    is_cancelled = Column(Integer, nullable=False, default=0)  # 0/1 визит отменен
-    meeting_result_id = Column(Text, ForeignKey("meeting_results.id"), nullable=True)
-    meeting_result_reason_id = Column(Text, ForeignKey("meeting_result_reasons.id"), nullable=True)
+    # Состояние записи (основной первоисточник бизнес-логики)
+    # 10=черновик, 20=отменена, 30=гость принят, 40=отказ, 50=не оформлен, 60=трудоустроен
+    state = Column(Integer, nullable=False, default=10)
 
     # Текущий пропуск (может быть revoked/failed — это история, не признак "активности")
     current_pass_id = Column(Text, ForeignKey("passes.id"), nullable=True)
@@ -35,11 +34,11 @@ class Entry(Base):
     passes = relationship("Pass", foreign_keys="Pass.entry_id", back_populates="entry")
     current_pass = relationship("Pass", foreign_keys=[current_pass_id])
     visit_goals = relationship("VisitGoal", secondary=entry_visit_goals, back_populates="entries")
-    meeting_result = relationship("MeetingResult", foreign_keys=[meeting_result_id], back_populates="entries")
-    meeting_result_reason = relationship(
-        "MeetingResultReason",
-        foreign_keys=[meeting_result_reason_id],
-        back_populates="entries",
+    meeting_reason = relationship(
+        "EntryMeetingReason",
+        uselist=False,
+        back_populates="entry",
+        cascade="all, delete-orphan",
     )
 
     # Index for datetime filtering
