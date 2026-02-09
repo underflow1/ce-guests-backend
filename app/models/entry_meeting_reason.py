@@ -16,11 +16,11 @@ class EntryMeetingReason(Base):
     __tablename__ = "entry_meeting_reasons"
 
     entry_id = Column(Text, ForeignKey("entries.id", ondelete="CASCADE"), primary_key=True)
-    meeting_result_reason_id = Column(Text, ForeignKey("meeting_result_reasons.id"), nullable=False)
+    reason_id = Column(Text, ForeignKey("reasons.id"), nullable=False)
 
     entry = relationship("Entry", back_populates="meeting_reason")
-    meeting_result_reason = relationship("MeetingResultReason")
+    reason = relationship("Reason")
 
     def __repr__(self):
-        return f"<EntryMeetingReason(entry_id={self.entry_id}, meeting_result_reason_id={self.meeting_result_reason_id})>"
+        return f"<EntryMeetingReason(entry_id={self.entry_id}, reason_id={self.reason_id})>"
 

@@ -54,10 +54,10 @@ class EntryDetailsUpdate(BaseModel):
         return v
 
 
-class EntryMeetingResultUpdate(BaseModel):
-    """Атомарная установка/смена результата встречи"""
-    meeting_result_id: str
-    meeting_result_reason_id: Optional[str] = None
+class EntryResultUpdate(BaseModel):
+    """Атомарная установка/смена результата (state=40/50/60) + причина (для 40/50)."""
+    state: int
+    reason_id: Optional[str] = None
 
 
 class EntryCompletedUpdate(BaseModel):
@@ -93,10 +93,8 @@ class EntryResponse(EntryBase):
     current_pass_id: Optional[str] = None
     pass_status: Optional[str] = None
     visit_goal_ids: List[str] = []
-    meeting_result_name: Optional[str] = None
-    meeting_result_code: Optional[int] = None
-    meeting_result_reason_id: Optional[str] = None
-    meeting_result_reason_name: Optional[str] = None
+    result_reason_id: Optional[str] = None
+    result_reason_name: Optional[str] = None
 
     class Config:
         from_attributes = True
