@@ -258,9 +258,13 @@ def set_entry_result(
 def rollback_entry_result(
     entry_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("can_rollback_meeting_result")),
+    current_user: User = Depends(require_permission("can_view")),
 ):
-    """Откат результата встречи в состояние 'гость принят' (40/50/60 -> 30)."""
+    """Откат результата встречи в состояние 'гость принят' (40/50/60 -> 30).
+
+    Особое правило: откат из state=50 (Не оформлен) разрешён всем, у кого есть can_view.
+    Откат из state=40/60 по-прежнему требует can_rollback_meeting_result.
+    """
     entry = db.query(Entry).filter(Entry.id == entry_id).first()
     if not entry or entry.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
@@ -271,6 +275,14 @@ def rollback_entry_result(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Откат результата возможен только после установки результата",
         )
+
+    if current_state != STATE_PENDING:
+        permissions = get_user_permissions(current_user)
+        if "can_rollback_meeting_result" not in permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Недостаточно прав: требуется право 'can_rollback_meeting_result'",
+            )
 
     timestamp = get_current_timestamp()
     _apply_state(entry, STATE_COMPLETED)
