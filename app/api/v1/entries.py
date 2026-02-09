@@ -13,11 +13,14 @@ from app.models.entry import Entry
 from app.models.pass_model import Pass
 from app.models.user import User
 from app.models.visit_goal import VisitGoal
-from app.models.meeting_result import MeetingResult
-from app.models.meeting_result_reason import MeetingResultReason
+from app.models.entry_meeting_reason import EntryMeetingReason
+from app.models.reason import Reason
+from app.models.state_reason_option import StateReasonOption
 from app.schemas.entry import (
     EntryCreate,
     EntryUpdate,
+    EntryDetailsUpdate,
+    EntryResultUpdate,
     EntryCompletedUpdate,
     VisitCancelledUpdate,
     EntryMoveUpdate,
@@ -44,10 +47,265 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 tz = timezone(settings.TIMEZONE)
 
+# Entry state machine (первичный источник бизнес-логики)
+STATE_DRAFT = 10
+STATE_CANCELLED = 20
+STATE_COMPLETED = 30
+STATE_REFUSED = 40
+STATE_PENDING = 50
+STATE_EMPLOYED = 60
+
+
+def _apply_state(entry: Entry, new_state: int) -> None:
+    """
+    Единая точка, где state приводит остальные поля к консистентному виду.
+    Причина результата встречи хранится отдельно (EntryMeetingReason) и
+    должна быть выставлена ДО вызова, если new_state=40/50.
+    """
+    entry.state = int(new_state)
+
+    if new_state == STATE_DRAFT:
+        entry.meeting_reason = None
+        return
+
+    if new_state == STATE_CANCELLED:
+        entry.meeting_reason = None
+        return
+
+    if new_state == STATE_COMPLETED:
+        entry.meeting_reason = None
+        return
+
+    # 40/50/60: meeting_reason может быть задана (только для 40/50)
+    if new_state == STATE_EMPLOYED:
+        entry.meeting_reason = None
+
 
 def parse_date(date_str: str) -> datetime:
     """Парсинг даты из формата YYYY-MM-DD"""
     return datetime.strptime(date_str, "%Y-%m-%d")
+
+
+@router.patch("/entries/{entry_id}/details", response_model=EntryResponse)
+def update_entry_details(
+    entry_id: str,
+    payload: EntryDetailsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("can_edit_entry")),
+):
+    """Атомарное обновление деталей визита (только state=10)."""
+    entry = db.query(Entry).options(joinedload(Entry.visit_goals)).filter(Entry.id == entry_id).first()
+    if not entry or entry.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
+
+    if int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT) != STATE_DRAFT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Детали визита можно редактировать только в состоянии 'черновик'",
+        )
+
+    timestamp = get_current_timestamp()
+    visit_goals = resolve_visit_goals(db, entry, payload.visit_goal_ids)
+
+    entry.name = payload.name
+    entry.responsible = payload.responsible
+    entry.visit_goals = visit_goals
+    entry.updated_at = timestamp
+    entry.updated_by = current_user.id
+    db.commit()
+    db.refresh(entry)
+
+    entry = db.query(Entry).options(
+        joinedload(Entry.current_pass),
+        joinedload(Entry.visit_goals),
+        joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
+    ).filter(Entry.id == entry.id).first()
+    response = build_entry_response(entry)
+
+    data = get_entries_data(db)
+    actor = build_actor_display(current_user)
+    broadcast_entry_event_with_data(
+        event_type="entry_updated",
+        change_data={"entry": response.dict(), "actor": actor},
+        data=data,
+    )
+    return response
+
+
+@router.patch("/entries/{entry_id}/result", response_model=EntryResponse)
+def set_entry_result(
+    entry_id: str,
+    payload: EntryResultUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Атомарная установка/смена результата (state=40/50/60)."""
+    entry = db.query(Entry).filter(Entry.id == entry_id).first()
+    if not entry or entry.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
+
+    permissions = get_user_permissions(current_user)
+    can_set = "can_set_meeting_result" in permissions
+    can_change = "can_change_meeting_result" in permissions
+
+    current_state = int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT)
+    if current_state not in (STATE_COMPLETED, STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Результат встречи можно устанавливать только после отметки 'принят'",
+        )
+    if current_state == STATE_COMPLETED and not can_set:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Недостаточно прав: требуется право 'can_set_meeting_result'",
+        )
+    if current_state in (STATE_REFUSED, STATE_EMPLOYED) and not can_change:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Недостаточно прав: требуется право 'can_change_meeting_result'",
+        )
+    if current_state == STATE_PENDING and not can_set:
+        # Переквалификация из временного статуса разрешена всем, кто умеет ставить результат
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Недостаточно прав: требуется право 'can_set_meeting_result'",
+        )
+
+    next_state = int(payload.state)
+    if next_state not in (STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный state результата")
+
+    timestamp = get_current_timestamp()
+
+    # Причину храним отдельно от entries
+    if next_state in (STATE_REFUSED, STATE_PENDING):
+        active_reasons = (
+            db.query(Reason)
+            .join(StateReasonOption, StateReasonOption.reason_id == Reason.id)
+            .filter(StateReasonOption.state == next_state, Reason.is_active == 1)
+            .all()
+        )
+        active_reason_ids = {r.id for r in active_reasons}
+
+        if active_reason_ids and payload.reason_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Нужно выбрать причину результата",
+            )
+
+        if payload.reason_id is not None:
+            reason = db.query(Reason).filter(Reason.id == payload.reason_id).first()
+            if not reason:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Причина результата не найдена",
+                )
+            if reason.is_active != 1:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Выбрана неактивная причина результата",
+                )
+            allowed = (
+                db.query(StateReasonOption)
+                .filter(StateReasonOption.state == next_state, StateReasonOption.reason_id == reason.id)
+                .first()
+            )
+            if not allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Причина результата не разрешена для выбранного state",
+                )
+
+            if entry.meeting_reason is None:
+                entry.meeting_reason = EntryMeetingReason(entry_id=entry.id, reason_id=reason.id)
+            else:
+                entry.meeting_reason.reason_id = reason.id
+        else:
+            entry.meeting_reason = None
+    else:
+        # state=60: причин быть не должно
+        if payload.reason_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Для state=60 причина не требуется",
+            )
+        entry.meeting_reason = None
+
+    _apply_state(entry, next_state)
+    entry.updated_at = timestamp
+    entry.updated_by = current_user.id
+    db.commit()
+    db.refresh(entry)
+
+    entry = db.query(Entry).options(
+        joinedload(Entry.current_pass),
+        joinedload(Entry.visit_goals),
+        joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
+    ).filter(Entry.id == entry.id).first()
+    response = build_entry_response(entry)
+
+    data = get_entries_data(db)
+    actor = build_actor_display(current_user)
+    broadcast_entry_event_with_data(
+        event_type="result_set",
+        change_data={"entry": response.dict(), "actor": actor},
+        data=data,
+    )
+    return response
+
+
+@router.patch("/entries/{entry_id}/result/rollback", response_model=EntryResponse)
+def rollback_entry_result(
+    entry_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("can_view")),
+):
+    """Откат результата встречи в состояние 'гость принят' (40/50/60 -> 30).
+
+    Особое правило: откат из state=50 (Не оформлен) разрешён всем, у кого есть can_view.
+    Откат из state=40/60 по-прежнему требует can_rollback_meeting_result.
+    """
+    entry = db.query(Entry).filter(Entry.id == entry_id).first()
+    if not entry or entry.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
+
+    current_state = int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT)
+    if current_state not in (STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Откат результата возможен только после установки результата",
+        )
+
+    if current_state != STATE_PENDING:
+        permissions = get_user_permissions(current_user)
+        if "can_rollback_meeting_result" not in permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Недостаточно прав: требуется право 'can_rollback_meeting_result'",
+            )
+
+    timestamp = get_current_timestamp()
+    _apply_state(entry, STATE_COMPLETED)
+    entry.updated_at = timestamp
+    entry.updated_by = current_user.id
+    db.commit()
+    db.refresh(entry)
+
+    entry = db.query(Entry).options(
+        joinedload(Entry.current_pass),
+        joinedload(Entry.visit_goals),
+        joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
+    ).filter(Entry.id == entry.id).first()
+    response = build_entry_response(entry)
+
+    data = get_entries_data(db)
+    actor = build_actor_display(current_user)
+    broadcast_entry_event_with_data(
+        event_type="result_rollback",
+        change_data={"entry": response.dict(), "actor": actor},
+        data=data,
+    )
+    return response
 
 
 def build_entry_response(entry: Entry) -> EntryResponse:
@@ -58,8 +316,16 @@ def build_entry_response(entry: Entry) -> EntryResponse:
     except Exception:
         pass_status = None
 
-    meeting_result = getattr(entry, "meeting_result", None)
-    meeting_result_reason = getattr(entry, "meeting_result_reason", None)
+    state = int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT)
+
+    reason_obj = getattr(entry, "meeting_reason", None)
+    reason_id = getattr(reason_obj, "reason_id", None) if reason_obj is not None else None
+    reason_name = None
+    try:
+        reason_rel = getattr(reason_obj, "reason", None) if reason_obj is not None else None
+        reason_name = getattr(reason_rel, "name", None) if reason_rel is not None else None
+    except Exception:
+        reason_name = None
 
     return EntryResponse(
         id=entry.id,
@@ -70,15 +336,12 @@ def build_entry_response(entry: Entry) -> EntryResponse:
         created_at=entry.created_at,
         updated_at=entry.updated_at,
         updated_by=entry.updated_by,
-        is_completed=bool(entry.is_completed),
-        is_cancelled=bool(getattr(entry, "is_cancelled", 0)),
+        state=state,
         current_pass_id=getattr(entry, "current_pass_id", None),
         pass_status=pass_status,
         visit_goal_ids=[goal.id for goal in (entry.visit_goals or [])],
-        meeting_result_id=getattr(entry, "meeting_result_id", None),
-        meeting_result_reason_id=getattr(entry, "meeting_result_reason_id", None),
-        meeting_result_name=(meeting_result.name if meeting_result is not None else None),
-        meeting_result_reason_name=(meeting_result_reason.name if meeting_result_reason is not None else None),
+        result_reason_id=reason_id,
+        result_reason_name=reason_name,
     )
 
 
@@ -112,88 +375,6 @@ def resolve_visit_goals(db: Session, entry: Optional[Entry], visit_goal_ids: lis
         )
 
     return goals
-
-
-def resolve_meeting_result(
-    db: Session,
-    entry: Optional[Entry],
-    meeting_result_id: Optional[str],
-    meeting_result_reason_id: Optional[str],
-) -> tuple[Optional[MeetingResult], Optional[MeetingResultReason]]:
-    if meeting_result_id is None:
-        if meeting_result_reason_id is not None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Причина результата встречи не может быть указана без результата",
-            )
-        return None, None
-
-    result = db.query(MeetingResult).filter(MeetingResult.id == meeting_result_id).first()
-    if not result:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Результат встречи не найден",
-        )
-
-    if not result.is_active and (not entry or entry.meeting_result_id != result.id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Выбран неактивный результат встречи",
-        )
-
-    active_reasons = (
-        db.query(MeetingResultReason)
-        .filter(
-            MeetingResultReason.meeting_result_id == meeting_result_id,
-            MeetingResultReason.is_active == 1,
-        )
-        .all()
-    )
-    active_reason_ids = {reason.id for reason in active_reasons}
-
-    if active_reason_ids:
-        if meeting_result_reason_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Нужно выбрать причину результата встречи",
-            )
-        reason = (
-            db.query(MeetingResultReason)
-            .filter(MeetingResultReason.id == meeting_result_reason_id)
-            .first()
-        )
-        if not reason or reason.meeting_result_id != meeting_result_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Причина результата встречи не найдена",
-            )
-        if not reason.is_active and (not entry or entry.meeting_result_reason_id != reason.id):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Выбрана неактивная причина результата встречи",
-            )
-        return result, reason
-
-    if meeting_result_reason_id is not None and (not entry or entry.meeting_result_reason_id != meeting_result_reason_id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Для выбранного результата встречи причина не требуется",
-        )
-
-    reason = None
-    if meeting_result_reason_id is not None:
-        reason = (
-            db.query(MeetingResultReason)
-            .filter(MeetingResultReason.id == meeting_result_reason_id)
-            .first()
-        )
-        if reason and reason.meeting_result_id != meeting_result_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Причина результата встречи не найдена",
-            )
-
-    return result, reason
 
 
 def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
@@ -245,8 +426,7 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
         entries = db.query(Entry).options(
             joinedload(Entry.current_pass),
             joinedload(Entry.visit_goals),
-            joinedload(Entry.meeting_result),
-            joinedload(Entry.meeting_result_reason),
+            joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
         ).filter(
             and_(
                 Entry.datetime >= date_from_str,
@@ -268,32 +448,7 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
         ]
         
         # Формируем entries как список словарей
-        entries_list = [
-            EntryResponse(
-                id=entry.id,
-                name=entry.name,
-                responsible=entry.responsible,
-                datetime=entry.datetime,
-                created_by=entry.created_by,
-                created_at=entry.created_at,
-                updated_at=entry.updated_at,
-                updated_by=entry.updated_by,
-                is_completed=bool(entry.is_completed),
-                is_cancelled=bool(getattr(entry, "is_cancelled", 0)),
-                current_pass_id=getattr(entry, "current_pass_id", None),
-                pass_status=(entry.current_pass.status if getattr(entry, "current_pass", None) is not None else None),
-                visit_goal_ids=[goal.id for goal in (entry.visit_goals or [])],
-                meeting_result_id=getattr(entry, "meeting_result_id", None),
-                meeting_result_reason_id=getattr(entry, "meeting_result_reason_id", None),
-                meeting_result_name=(entry.meeting_result.name if getattr(entry, "meeting_result", None) is not None else None),
-                meeting_result_reason_name=(
-                    entry.meeting_result_reason.name
-                    if getattr(entry, "meeting_result_reason", None) is not None
-                    else None
-                ),
-            ).dict()
-            for entry in entries
-        ]
+        entries_list = [build_entry_response(entry).dict() for entry in entries]
         
         total_time = time.time() - start_time
         logger.info(f"get_entries_data выполнено за {total_time:.3f}с (calendar: {calendar_time:.3f}с, workdays: {workdays_time:.3f}с, DB: {db_time:.3f}с)")
@@ -358,27 +513,6 @@ def create_entry(
     
     timestamp = get_current_timestamp()
     visit_goals = resolve_visit_goals(db, None, entry_data.visit_goal_ids)
-    meeting_result = None
-    meeting_result_reason = None
-
-    if entry_data.is_completed and entry_data.meeting_result_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Для отмеченного визита нужно выбрать результат встречи",
-        )
-
-    if entry_data.meeting_result_id is not None or entry_data.meeting_result_reason_id is not None:
-        if not entry_data.is_completed:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Результат встречи можно указать только после отметки прихода",
-            )
-        meeting_result, meeting_result_reason = resolve_meeting_result(
-            db,
-            None,
-            entry_data.meeting_result_id,
-            entry_data.meeting_result_reason_id,
-        )
     
     entry = Entry(
         name=entry_data.name,
@@ -386,10 +520,10 @@ def create_entry(
         datetime=entry_data.datetime,
         created_by=current_user.id,
         created_at=timestamp,
-        is_completed=1 if entry_data.is_completed else 0,
-        meeting_result_id=(meeting_result.id if meeting_result is not None else None),
-        meeting_result_reason_id=(meeting_result_reason.id if meeting_result_reason is not None else None),
+        # всегда создаем черновик
+        state=STATE_DRAFT,
     )
+    _apply_state(entry, entry.state)
     
     db.add(entry)
     db.flush()
@@ -402,8 +536,7 @@ def create_entry(
     entry = db.query(Entry).options(
         joinedload(Entry.current_pass),
         joinedload(Entry.visit_goals),
-        joinedload(Entry.meeting_result),
-        joinedload(Entry.meeting_result_reason),
+        joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
     
@@ -426,7 +559,7 @@ def update_entry(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Обновить запись"""
+    """Обновить детали визита (только черновик). Результат встречи ставится отдельно."""
     entry = db.query(Entry).filter(Entry.id == entry_id).first()
     
     if not entry:
@@ -443,7 +576,6 @@ def update_entry(
     
     permissions = get_user_permissions(current_user)
     can_edit_entry = "can_edit_entry" in permissions
-    can_set_meeting_result = "can_set_meeting_result" in permissions
 
     existing_goal_ids = {goal.id for goal in (entry.visit_goals or [])}
     incoming_goal_ids = set(entry_data.visit_goal_ids)
@@ -452,42 +584,16 @@ def update_entry(
     responsible_changed = (entry_data.responsible or "") != (entry.responsible or "")
     edit_fields_changed = name_changed or responsible_changed or visit_goals_changed
 
-    meeting_result_changed = (
-        entry_data.meeting_result_id != entry.meeting_result_id
-        or entry_data.meeting_result_reason_id != entry.meeting_result_reason_id
-    )
-
     if edit_fields_changed and not can_edit_entry:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Недостаточно прав: требуется право 'can_edit_entry'",
         )
-
-    if meeting_result_changed and not can_set_meeting_result:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Недостаточно прав: требуется право 'can_set_meeting_result'",
-        )
-
-    if entry.is_completed and entry_data.meeting_result_id is None:
+    # Детали можно править только в state=10
+    if int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT) != STATE_DRAFT:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Для отмеченного визита нужно выбрать результат встречи",
-        )
-
-    meeting_result = None
-    meeting_result_reason = None
-    if meeting_result_changed or entry_data.meeting_result_id is not None:
-        if not entry.is_completed:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Результат встречи можно указать только после отметки прихода",
-            )
-        meeting_result, meeting_result_reason = resolve_meeting_result(
-            db,
-            entry,
-            entry_data.meeting_result_id,
-            entry_data.meeting_result_reason_id,
+            detail="Детали визита можно редактировать только в состоянии 'черновик'",
         )
 
     timestamp = get_current_timestamp()
@@ -497,14 +603,7 @@ def update_entry(
         entry.name = entry_data.name
         entry.responsible = entry_data.responsible
         entry.visit_goals = visit_goals
-
-    if meeting_result_changed or entry_data.meeting_result_id is not None or entry.meeting_result_id is not None:
-        entry.meeting_result_id = meeting_result.id if meeting_result is not None else None
-        entry.meeting_result_reason_id = (
-            meeting_result_reason.id if meeting_result_reason is not None else None
-        )
-
-    if edit_fields_changed or meeting_result_changed:
+    if edit_fields_changed:
         entry.updated_at = timestamp
         entry.updated_by = current_user.id
     
@@ -516,20 +615,12 @@ def update_entry(
     entry = db.query(Entry).options(
         joinedload(Entry.current_pass),
         joinedload(Entry.visit_goals),
-        joinedload(Entry.meeting_result),
-        joinedload(Entry.meeting_result_reason),
+        joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
     
     data = get_entries_data(db)
     actor = build_actor_display(current_user)
-
-    if meeting_result_changed:
-        broadcast_entry_event_with_data(
-            event_type="meeting_result_set",
-            change_data={"entry": response.dict(), "actor": actor},
-            data=data,
-        )
 
     if edit_fields_changed:
         # Отправляем WebSocket событие entry_updated с полными данными недели
@@ -550,7 +641,7 @@ def mark_entry_completed(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Отметить гостя как пришедшего (меняем только is_completed)"""
+    """Отметить гостя как пришедшего (state 10 <-> 30)"""
     entry = db.query(Entry).filter(Entry.id == entry_id).first()
     
     if not entry:
@@ -566,7 +657,7 @@ def mark_entry_completed(
         )
 
     permissions = get_user_permissions(current_user)
-    if entry_data.is_completed:
+    if entry_data.completed:
         if "can_mark_completed" not in permissions:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -579,12 +670,24 @@ def mark_entry_completed(
                 detail="Недостаточно прав: требуется право 'can_unmark_completed'",
             )
     
+    current_state = int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT)
     timestamp = get_current_timestamp()
-    
-    entry.is_completed = 1 if entry_data.is_completed else 0
-    if not entry_data.is_completed:
-        entry.meeting_result_id = None
-        entry.meeting_result_reason_id = None
+
+    if entry_data.completed:
+        if current_state != STATE_DRAFT:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Отметить 'принят' можно только из состояния 'черновик'",
+            )
+        _apply_state(entry, STATE_COMPLETED)
+    else:
+        if current_state != STATE_COMPLETED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Снять 'принят' можно только из состояния 'гость принят'",
+            )
+        _apply_state(entry, STATE_DRAFT)
+
     entry.updated_at = timestamp
     entry.updated_by = current_user.id
     
@@ -592,19 +695,17 @@ def mark_entry_completed(
     db.refresh(entry)
     
     logger.info(
-        f"Обновлена отметка прихода: ID={entry.id}, is_completed={entry.is_completed}, user='{current_user.username}'"
+        f"Обновлена отметка прихода: ID={entry.id}, state={getattr(entry, 'state', None)}, user='{current_user.username}'"
     )
     
     entry = db.query(Entry).options(
         joinedload(Entry.current_pass),
         joinedload(Entry.visit_goals),
-        joinedload(Entry.meeting_result),
-        joinedload(Entry.meeting_result_reason),
+        joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
     
-    # Определяем тип события в зависимости от значения is_completed
-    event_type = "entry_completed" if entry_data.is_completed else "entry_uncompleted"
+    event_type = "entry_completed" if entry_data.completed else "entry_uncompleted"
     
     # Отправляем WebSocket событие с полными данными недели
     data = get_entries_data(db)
@@ -625,7 +726,7 @@ def mark_visit_cancelled(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Отметить визит как отмененный (меняем только is_cancelled)"""
+    """Отметить визит как отмененный (state 10 <-> 20)"""
     entry = db.query(Entry).filter(Entry.id == entry_id).first()
 
     if not entry:
@@ -635,7 +736,7 @@ def mark_visit_cancelled(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись удалена")
 
     permissions = get_user_permissions(current_user)
-    if entry_data.is_cancelled:
+    if entry_data.cancelled:
         if "can_mark_cancelled" not in permissions:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -648,9 +749,24 @@ def mark_visit_cancelled(
                 detail="Недостаточно прав: требуется право 'can_unmark_cancelled'",
             )
 
+    current_state = int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT)
     timestamp = get_current_timestamp()
 
-    entry.is_cancelled = 1 if entry_data.is_cancelled else 0
+    if entry_data.cancelled:
+        if current_state != STATE_DRAFT:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Отменить визит можно только из состояния 'черновик'",
+            )
+        _apply_state(entry, STATE_CANCELLED)
+    else:
+        if current_state != STATE_CANCELLED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Снять отмену можно только из состояния 'отменена'",
+            )
+        _apply_state(entry, STATE_DRAFT)
+
     entry.updated_at = timestamp
     entry.updated_by = current_user.id
 
@@ -660,12 +776,11 @@ def mark_visit_cancelled(
     entry = db.query(Entry).options(
         joinedload(Entry.current_pass),
         joinedload(Entry.visit_goals),
-        joinedload(Entry.meeting_result),
-        joinedload(Entry.meeting_result_reason),
+        joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
 
-    event_type = "visit_cancelled" if entry_data.is_cancelled else "visit_uncancelled"
+    event_type = "visit_cancelled" if entry_data.cancelled else "visit_uncancelled"
     data = get_entries_data(db)
     actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
@@ -697,6 +812,12 @@ def order_pass(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
     if entry.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись удалена")
+    current_state = int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT)
+    if current_state in (STATE_CANCELLED, STATE_REFUSED):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Заказ пропуска недоступен в текущем состоянии записи",
+        )
 
     permissions = get_user_permissions(current_user)
     if "can_mark_pass" not in permissions:
@@ -734,8 +855,7 @@ def order_pass(
     entry = db.query(Entry).options(
         joinedload(Entry.current_pass),
         joinedload(Entry.visit_goals),
-        joinedload(Entry.meeting_result),
-        joinedload(Entry.meeting_result_reason),
+        joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
 
@@ -760,8 +880,7 @@ def revoke_pass(
     entry = db.query(Entry).options(
         joinedload(Entry.current_pass),
         joinedload(Entry.visit_goals),
-        joinedload(Entry.meeting_result),
-        joinedload(Entry.meeting_result_reason),
+        joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry_id).first()
 
     if not entry:
@@ -792,8 +911,7 @@ def revoke_pass(
     entry = db.query(Entry).options(
         joinedload(Entry.current_pass),
         joinedload(Entry.visit_goals),
-        joinedload(Entry.meeting_result),
-        joinedload(Entry.meeting_result_reason),
+        joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
 
@@ -828,6 +946,11 @@ def move_entry(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Запись удалена",
+        )
+    if int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT) != STATE_DRAFT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Перемещение возможно только в состоянии 'черновик'",
         )
 
     # Проверяем права доступа - требуется can_move_entry
@@ -864,8 +987,7 @@ def move_entry(
     entry = db.query(Entry).options(
         joinedload(Entry.current_pass),
         joinedload(Entry.visit_goals),
-        joinedload(Entry.meeting_result),
-        joinedload(Entry.meeting_result_reason),
+        joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
     
@@ -935,6 +1057,13 @@ def delete_entry(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Запись уже удалена",
         )
+    # Удаление: админу можно везде, остальным — только в state=10
+    if not bool(getattr(current_user, "is_admin", 0)):
+        if int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT) != STATE_DRAFT:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Удаление доступно только для черновиков",
+            )
     
     timestamp = get_current_timestamp()
     

@@ -7,8 +7,9 @@ from app.models.refresh_token import RefreshToken
 from app.models.setting import Setting
 from app.models.pass_model import Pass
 from app.models.visit_goal import VisitGoal
-from app.models.meeting_result import MeetingResult
-from app.models.meeting_result_reason import MeetingResultReason
+from app.models.entry_meeting_reason import EntryMeetingReason
+from app.models.reason import Reason
+from app.models.state_reason_option import StateReasonOption
 
 __all__ = [
     "User",
@@ -20,6 +21,7 @@ __all__ = [
     "Setting",
     "Pass",
     "VisitGoal",
-    "MeetingResult",
-    "MeetingResultReason",
+    "EntryMeetingReason",
+    "Reason",
+    "StateReasonOption",
 ]

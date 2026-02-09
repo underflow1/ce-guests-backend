@@ -87,12 +87,14 @@ def get_user_permissions(user: User) -> Set[str]:
             "can_mark_cancelled", "can_unmark_cancelled",
             "can_mark_pass", "can_revoke_pass",
             "can_set_meeting_result",
+            "can_change_meeting_result", "can_rollback_meeting_result",
             # Фронтенд-права
             "can_move_ui", "can_mark_completed_ui", "can_unmark_completed_ui",
             "can_edit_entry_ui", "can_delete_ui",
             "can_mark_cancelled_ui", "can_unmark_cancelled_ui",
             "can_mark_pass_ui", "can_revoke_pass_ui",
             "can_set_meeting_result_ui",
+            "can_change_meeting_result_ui", "can_rollback_meeting_result_ui",
         }
     
     if not user.role or not user.role.role_permissions:
