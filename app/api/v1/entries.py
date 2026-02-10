@@ -1004,11 +1004,17 @@ def move_entry(
     
     # Валидация datetime формата уже в схеме
     try:
-        datetime.fromisoformat(entry_data.datetime.replace("Z", "+00:00"))
+        target_datetime = datetime.fromisoformat(entry_data.datetime.replace("Z", "+00:00"))
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="datetime должен быть в формате ISO 8601 (YYYY-MM-DDTHH:MM:SS)",
+        )
+
+    if target_datetime.date() < datetime.now(tz).date():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Нельзя переносить запись на прошедшую дату",
         )
     
     timestamp = get_current_timestamp()
