@@ -31,10 +31,24 @@ def get_user_from_token(token: str) -> Optional[User]:
         db.close()
 
 
+def parse_week_offset(raw_value: Optional[str]) -> Optional[int]:
+    if raw_value is None or raw_value == "":
+        return 0
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return None
+
+
 @router.websocket("/ws/entries")
 async def entries_websocket(websocket: WebSocket):
     token = websocket.query_params.get("token")
     if not token:
+        await websocket.close(code=1008)
+        return
+
+    week_offset = parse_week_offset(websocket.query_params.get("week_offset"))
+    if week_offset is None:
         await websocket.close(code=1008)
         return
 
@@ -43,7 +57,7 @@ async def entries_websocket(websocket: WebSocket):
         await websocket.close(code=1008)
         return
 
-    await entry_event_manager.connect(websocket)
+    await entry_event_manager.connect(websocket, week_offset=week_offset)
     ping_task = asyncio.create_task(entry_event_manager.send_ping(websocket))
 
     try:

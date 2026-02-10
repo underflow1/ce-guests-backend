@@ -5,7 +5,7 @@ from typing import Optional
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 from sqlalchemy.orm import joinedload
 
 from app.database import get_db
@@ -32,7 +32,10 @@ from app.schemas.entry import (
 )
 from app.api.deps import get_current_user, get_current_active_admin, get_user_permissions, require_permission
 from app.services.auth import get_current_timestamp
-from app.services.entry_events import broadcast_entry_event, broadcast_entry_event_with_data
+from app.services.entry_events import (
+    broadcast_entry_event_with_data,
+    get_active_week_offsets,
+)
 from app.services.workdays import (
     get_previous_workday,
     get_next_workday,
@@ -122,12 +125,12 @@ def update_entry_details(
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
 
-    data = get_entries_data(db)
+    data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type="entry_updated",
         change_data={"entry": response.dict(), "actor": actor},
-        data=data,
+        data_by_week_offset=data_by_week_offset,
     )
     return response
 
@@ -244,12 +247,12 @@ def set_entry_result(
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
 
-    data = get_entries_data(db)
+    data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type="result_set",
         change_data={"entry": response.dict(), "actor": actor},
-        data=data,
+        data_by_week_offset=data_by_week_offset,
     )
     return response
 
@@ -298,12 +301,12 @@ def rollback_entry_result(
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
 
-    data = get_entries_data(db)
+    data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type="result_rollback",
         change_data={"entry": response.dict(), "actor": actor},
-        data=data,
+        data_by_week_offset=data_by_week_offset,
     )
     return response
 
@@ -377,51 +380,73 @@ def resolve_visit_goals(db: Session, entry: Optional[Entry], visit_goal_ids: lis
     return goals
 
 
-def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
+def _is_date_within_range(target: datetime, start: datetime, end: datetime) -> bool:
+    return start <= target <= end
+
+
+def get_entries_data(db: Session, today: Optional[str] = None, week_offset: int = 0) -> dict:
     """
     Единая функция для получения данных недели (entries, reference_dates, calendar_structure)
     Используется в GET /entries и для формирования WebSocket событий
     """
     start_time = time.time()
     try:
-        # Определяем текущую дату
+        # Определяем опорную "сегодняшнюю" дату
         if today:
             today_date = parse_date(today)
             reference_date = tz.localize(today_date.replace(hour=0, minute=0, second=0, microsecond=0))
         else:
             reference_date = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        # Получаем структуру текущей недели
+
+        # Нижняя панель может смотреть смещенную неделю.
+        # Верхние reference_dates всегда считаются от текущей даты.
+        bottom_reference_date = reference_date + timedelta(days=(int(week_offset) * 7))
+
+        # Получаем структуру недели для нижней панели
         calendar_start = time.time()
-        calendar_structure = get_week_structure(reference_date)
+        calendar_structure = get_week_structure(bottom_reference_date)
         calendar_time = time.time() - calendar_start
         logger.debug(f"get_week_structure заняло: {calendar_time:.3f}с")
-        
-        # Находим предыдущий и следующий рабочие дни
+
+        # Находим предыдущий и следующий рабочие дни относительно текущей даты
         workdays_start = time.time()
         previous_workday = get_previous_workday(reference_date)
         next_workday = get_next_workday(reference_date)
         workdays_time = time.time() - workdays_start
         logger.debug(f"get_workdays (previous/next) заняло: {workdays_time:.3f}с")
-        
-        # Определяем диапазон дат для получения записей
-        # Текущая неделя (понедельник - воскресенье)
-        week_start = get_week_start(reference_date)
-        week_end = week_start + timedelta(days=6)
-        
-        # Добавляем предыдущий/следующий рабочие дни, если они вне текущей недели
-        date_from = week_start
-        date_to = week_end
-        if previous_workday < week_start:
-            date_from = previous_workday
-        if next_workday > week_end:
-            date_to = next_workday
-        
-        # Форматируем для фильтрации (datetime хранится как TEXT в ISO формате)
-        date_from_str = date_from.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        date_to_str = date_to.replace(hour=23, minute=59, second=59, microsecond=999999).isoformat()
-        
-        # Получаем записи в диапазоне дат, которые не удалены
+
+        # Формируем объединение интересующих диапазонов:
+        # - текущая неделя (для верхних панелей)
+        # - выбранная пользователем неделя (для нижней панели)
+        # - соседние рабочие дни (если вне указанных недель)
+        current_week_start = get_week_start(reference_date)
+        current_week_end = current_week_start + timedelta(days=6)
+        bottom_week_start = get_week_start(bottom_reference_date)
+        bottom_week_end = bottom_week_start + timedelta(days=6)
+
+        current_week_dates = {
+            format_date(current_week_start + timedelta(days=day_offset))
+            for day_offset in range(7)
+        }
+        bottom_week_dates = {
+            format_date(bottom_week_start + timedelta(days=day_offset))
+            for day_offset in range(7)
+        }
+        target_dates = set(current_week_dates) | set(bottom_week_dates)
+
+        if (
+            not _is_date_within_range(previous_workday, current_week_start, current_week_end)
+            and not _is_date_within_range(previous_workday, bottom_week_start, bottom_week_end)
+        ):
+            target_dates.add(format_date(previous_workday))
+
+        if (
+            not _is_date_within_range(next_workday, current_week_start, current_week_end)
+            and not _is_date_within_range(next_workday, bottom_week_start, bottom_week_end)
+        ):
+            target_dates.add(format_date(next_workday))
+
+        # Получаем записи в целевых диапазонах, которые не удалены
         db_start = time.time()
         entries = db.query(Entry).options(
             joinedload(Entry.current_pass),
@@ -429,14 +454,13 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
             joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
         ).filter(
             and_(
-                Entry.datetime >= date_from_str,
-                Entry.datetime <= date_to_str,
-                Entry.deleted_at.is_(None)
+                Entry.deleted_at.is_(None),
+                func.substr(Entry.datetime, 1, 10).in_(sorted(target_dates)),
             )
         ).order_by(Entry.datetime).all()
         db_time = time.time() - db_start
         logger.debug(f"DB запрос занял: {db_time:.3f}с")
-        
+
         # Преобразуем calendar_structure в список CalendarDay
         calendar_days = [
             CalendarDay(
@@ -446,13 +470,16 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
             )
             for day in calendar_structure
         ]
-        
+
         # Формируем entries как список словарей
         entries_list = [build_entry_response(entry).dict() for entry in entries]
-        
+
         total_time = time.time() - start_time
-        logger.info(f"get_entries_data выполнено за {total_time:.3f}с (calendar: {calendar_time:.3f}с, workdays: {workdays_time:.3f}с, DB: {db_time:.3f}с)")
-        
+        logger.info(
+            f"get_entries_data(week_offset={week_offset}) выполнено за {total_time:.3f}с "
+            f"(calendar: {calendar_time:.3f}с, workdays: {workdays_time:.3f}с, DB: {db_time:.3f}с)"
+        )
+
         return {
             "entries": entries_list,
             "reference_dates": {
@@ -466,10 +493,24 @@ def get_entries_data(db: Session, today: Optional[str] = None) -> dict:
         raise
 
 
+def get_entries_data_for_active_offsets(
+    db: Session,
+    today: Optional[str] = None,
+    include_week_offset: int = 0,
+) -> dict[int, dict]:
+    offsets = get_active_week_offsets()
+    offsets.add(int(include_week_offset))
+    data_by_week_offset: dict[int, dict] = {}
+    for offset in sorted(offsets):
+        data_by_week_offset[offset] = get_entries_data(db, today=today, week_offset=offset)
+    return data_by_week_offset
+
+
 
 @router.get("/entries", response_model=EntriesListResponse)
 def get_entries(
     today: str = Query(None, description="Текущая дата в формате YYYY-MM-DD (опционально)"),
+    week_offset: int = Query(0, description="Смещение недели для нижней панели (0=текущая, -1=предыдущая, +1=следующая)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("can_view")),
 ):
@@ -479,7 +520,7 @@ def get_entries(
     Возвращает только не удаленные записи
     """
     try:
-        data = get_entries_data(db, today)
+        data = get_entries_data(db, today=today, week_offset=week_offset)
         
         return EntriesListResponse(
             entries=[EntryResponse(**entry) for entry in data["entries"]],
@@ -541,12 +582,12 @@ def create_entry(
     response = build_entry_response(entry)
     
     # Отправляем WebSocket событие с полными данными недели
-    data = get_entries_data(db)
+    data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type="entry_created",
         change_data={"entry": response.dict(), "actor": actor},
-        data=data,
+        data_by_week_offset=data_by_week_offset,
     )
     
     return response
@@ -619,7 +660,7 @@ def update_entry(
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
     
-    data = get_entries_data(db)
+    data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
 
     if edit_fields_changed:
@@ -628,7 +669,7 @@ def update_entry(
         broadcast_entry_event_with_data(
             event_type="entry_updated",
             change_data={"entry": response.dict(), "actor": actor},
-            data=data,
+            data_by_week_offset=data_by_week_offset,
         )
     
     return response
@@ -708,12 +749,12 @@ def mark_entry_completed(
     event_type = "entry_completed" if entry_data.completed else "entry_uncompleted"
     
     # Отправляем WebSocket событие с полными данными недели
-    data = get_entries_data(db)
+    data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type=event_type,
         change_data={"entry": response.dict(), "actor": actor},
-        data=data,
+        data_by_week_offset=data_by_week_offset,
     )
     
     return response
@@ -781,12 +822,12 @@ def mark_visit_cancelled(
     response = build_entry_response(entry)
 
     event_type = "visit_cancelled" if entry_data.cancelled else "visit_uncancelled"
-    data = get_entries_data(db)
+    data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type=event_type,
         change_data={"entry": response.dict(), "actor": actor},
-        data=data,
+        data_by_week_offset=data_by_week_offset,
     )
 
     return response
@@ -859,12 +900,12 @@ def order_pass(
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
 
-    data = get_entries_data(db)
+    data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type="pass_ordered",
         change_data={"entry": response.dict(), "actor": actor},
-        data=data,
+        data_by_week_offset=data_by_week_offset,
     )
 
     return response
@@ -915,12 +956,12 @@ def revoke_pass(
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
 
-    data = get_entries_data(db)
+    data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type="pass_revoked",
         change_data={"entry": response.dict(), "actor": actor},
-        data=data,
+        data_by_week_offset=data_by_week_offset,
     )
 
     return response
@@ -992,12 +1033,12 @@ def move_entry(
     response = build_entry_response(entry)
     
     # Отправляем WebSocket событие entry_moved с полными данными недели
-    data = get_entries_data(db)
+    data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type="entry_moved",
         change_data={"entry": response.dict(), "actor": actor},
-        data=data,
+        data_by_week_offset=data_by_week_offset,
     )
     
     return response
@@ -1023,12 +1064,12 @@ def delete_all_entries(
     
     # Отправляем WebSocket событие entries_deleted_all с полными данными недели
     # (entries будет пустым массивом после удаления)
-    data = get_entries_data(db)
+    data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type="entries_deleted_all",
         change_data={"deleted_count": deleted_count, "actor": actor},
-        data=data,
+        data_by_week_offset=data_by_week_offset,
     )
     
     return {
@@ -1076,12 +1117,12 @@ def delete_entry(
     logger.info(f"Удалена запись: ID={entry.id}, name='{entry.name}', user='{current_user.username}'")
     
     # Отправляем WebSocket событие entry_deleted с полными данными недели
-    data = get_entries_data(db)
+    data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
         event_type="entry_deleted",
         change_data={"entry": entry_snapshot.dict(), "actor": actor},
-        data=data,
+        data_by_week_offset=data_by_week_offset,
     )
     
     return {"success": True}
