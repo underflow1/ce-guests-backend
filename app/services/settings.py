@@ -27,7 +27,17 @@ def normalize_notifications(value: Any) -> Dict[str, Any]:
 
     enabled_types = value.get("enabled_notification_types")
     if isinstance(enabled_types, list):
-        defaults["enabled_notification_types"] = enabled_types
+        # Удаляем устаревшие/неизвестные коды уведомлений, чтобы не падало сохранение настроек
+        normalized_enabled_types = []
+        seen = set()
+        for notification_type in enabled_types:
+            if notification_type not in NOTIFICATION_TYPE_CODES:
+                continue
+            if notification_type in seen:
+                continue
+            seen.add(notification_type)
+            normalized_enabled_types.append(notification_type)
+        defaults["enabled_notification_types"] = normalized_enabled_types
 
     return defaults
 
@@ -38,6 +48,8 @@ def build_default_pass_integration() -> Dict[str, Any]:
         "base_url": None,
         "login": None,
         "password": None,
+        "object": None,
+        "corpa": None,
     }
 
 
@@ -46,7 +58,7 @@ def normalize_pass_integration(value: Any) -> Dict[str, Any]:
     if not isinstance(value, dict):
         return defaults
 
-    for key in ["enabled", "base_url", "login", "password"]:
+    for key in ["enabled", "base_url", "login", "password", "object", "corpa"]:
         if key in value:
             defaults[key] = value.get(key)
 

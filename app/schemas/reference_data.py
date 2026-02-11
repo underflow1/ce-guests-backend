@@ -9,3 +9,4 @@ class ReferenceDataResponse(BaseModel):
     visit_goals: List[VisitGoalResponse] = Field(default_factory=list)
     reasons: List[ReasonResponse] = Field(default_factory=list)
     reasons_by_state: Dict[str, List[ReasonResponse]] = Field(default_factory=dict)
+    pass_ordering_enabled: bool = False
