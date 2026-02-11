@@ -148,7 +148,7 @@ def set_entry_result(
     current_user: User = Depends(get_current_user),
 ):
     """Атомарная установка state:
-    - 10 -> 20/30
+    - 10 -> 20/30/40/50/60
     - 30/40/50/60 -> 40/50/60
     """
     entry = db.query(Entry).filter(Entry.id == entry_id).first()
@@ -176,10 +176,16 @@ def set_entry_result(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Недостаточно прав: требуется право 'can_mark_cancelled'",
                 )
+        elif next_state in (STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
+            if not can_set:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Недостаточно прав: требуется право 'can_set_meeting_result'",
+                )
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Из состояния 'черновик' доступны только переходы в 20 или 30",
+                detail="Из состояния 'черновик' доступны только переходы в 20, 30, 40, 50 или 60",
             )
     elif current_state in (STATE_ARRIVED, STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
         if next_state not in (STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
