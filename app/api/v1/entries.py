@@ -43,6 +43,12 @@ from app.services.workdays import (
 )
 from pytz import timezone
 from app.config import settings
+from app.services.pass_integration import (
+    PassIntegrationAmbiguousError,
+    PassIntegrationError,
+    order_external_pass,
+    revoke_external_pass,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -117,7 +123,7 @@ def update_entry_details(
     db.refresh(entry)
 
     entry = db.query(Entry).options(
-        joinedload(Entry.current_pass),
+        joinedload(Entry.passes),
         joinedload(Entry.visit_goals),
         joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()
@@ -263,7 +269,7 @@ def set_entry_result(
     db.refresh(entry)
 
     entry = db.query(Entry).options(
-        joinedload(Entry.current_pass),
+        joinedload(Entry.passes),
         joinedload(Entry.visit_goals),
         joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()
@@ -338,7 +344,7 @@ def rollback_entry_state(
     db.refresh(entry)
 
     entry = db.query(Entry).options(
-        joinedload(Entry.current_pass),
+        joinedload(Entry.passes),
         joinedload(Entry.visit_goals),
         joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()
@@ -355,12 +361,9 @@ def rollback_entry_state(
 
 
 def build_entry_response(entry: Entry) -> EntryResponse:
-    pass_status = None
-    try:
-        if getattr(entry, "current_pass", None) is not None:
-            pass_status = entry.current_pass.status
-    except Exception:
-        pass_status = None
+    active_pass = get_active_pass_for_entry(entry)
+    pass_status = getattr(active_pass, "status", None)
+    pass_external_id = getattr(active_pass, "external_id", None)
 
     state = int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT)
 
@@ -383,7 +386,7 @@ def build_entry_response(entry: Entry) -> EntryResponse:
         updated_at=entry.updated_at,
         updated_by=entry.updated_by,
         state=state,
-        current_pass_id=getattr(entry, "current_pass_id", None),
+        pass_external_id=pass_external_id,
         pass_status=pass_status,
         visit_goal_ids=[goal.id for goal in (entry.visit_goals or [])],
         result_reason_id=reason_id,
@@ -492,7 +495,7 @@ def get_entries_data(db: Session, today: Optional[str] = None, week_offset: int 
         # Получаем записи в целевых диапазонах, которые не удалены
         db_start = time.time()
         entries = db.query(Entry).options(
-            joinedload(Entry.current_pass),
+            joinedload(Entry.passes),
             joinedload(Entry.visit_goals),
             joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
         ).filter(
@@ -618,7 +621,7 @@ def create_entry(
     logger.info(f"Создана запись: ID={entry.id}, name='{entry.name}', datetime={entry.datetime}, user='{current_user.username}'")
     
     entry = db.query(Entry).options(
-        joinedload(Entry.current_pass),
+        joinedload(Entry.passes),
         joinedload(Entry.visit_goals),
         joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()
@@ -697,7 +700,7 @@ def update_entry(
     logger.info(f"Обновлена запись: ID={entry.id}, name='{entry.name}', datetime={entry.datetime}, user='{current_user.username}'")
     
     entry = db.query(Entry).options(
-        joinedload(Entry.current_pass),
+        joinedload(Entry.passes),
         joinedload(Entry.visit_goals),
         joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()
@@ -723,6 +726,16 @@ def _entry_date_from_datetime(datetime_str: str) -> str:
     if "T" in datetime_str:
         return datetime_str.split("T", 1)[0]
     return datetime_str[:10]
+
+
+def get_active_pass_for_entry(entry: Entry) -> Optional[Pass]:
+    entry_date = _entry_date_from_datetime(getattr(entry, "datetime", ""))
+    candidates = [
+        p for p in (getattr(entry, "passes", None) or [])
+        if getattr(p, "status", None) == "ordered" and getattr(p, "date", None) == entry_date
+    ]
+    candidates.sort(key=lambda p: getattr(p, "created_at", "") or "", reverse=True)
+    return candidates[0] if candidates else None
 
 
 @router.put("/entries/{entry_id}/pass", response_model=EntryResponse)
@@ -754,15 +767,47 @@ def order_pass(
 
     timestamp = get_current_timestamp()
     pass_date = _entry_date_from_datetime(entry.datetime)
+    today_date = datetime.now(tz).strftime("%Y-%m-%d")
+    if pass_date < today_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Нельзя заказать пропуск на прошедшую дату",
+        )
     request_id = str(uuid.uuid4())
 
-    # На текущем этапе внешнюю интеграцию не реализуем (external_id заполним позже)
+    try:
+        external_id = order_external_pass(
+            db=db,
+            entry_name=entry.name,
+            pass_date=pass_date,
+        )
+    except PassIntegrationAmbiguousError as exc:
+        entry_snapshot = build_entry_response(entry)
+        data_by_week_offset = get_entries_data_for_active_offsets(db)
+        actor = build_actor_display(current_user)
+        broadcast_entry_event_with_data(
+            event_type="pass_order_failed",
+            change_data={"entry": entry_snapshot.dict(), "actor": actor},
+            data_by_week_offset=data_by_week_offset,
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except PassIntegrationError as exc:
+        entry_snapshot = build_entry_response(entry)
+        data_by_week_offset = get_entries_data_for_active_offsets(db)
+        actor = build_actor_display(current_user)
+        broadcast_entry_event_with_data(
+            event_type="pass_order_failed",
+            change_data={"entry": entry_snapshot.dict(), "actor": actor},
+            data_by_week_offset=data_by_week_offset,
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
     new_pass = Pass(
         id=str(uuid.uuid4()),
         entry_id=entry.id,
         date=pass_date,
         request_id=request_id,
-        external_id=None,
+        external_id=external_id,
         status="ordered",
         created_at=timestamp,
         updated_at=None,
@@ -771,15 +816,14 @@ def order_pass(
     db.add(new_pass)
     db.flush()
 
-    entry.current_pass_id = new_pass.id
     entry.updated_at = timestamp
     entry.updated_by = current_user.id
 
     db.commit()
 
-    # Подгружаем current_pass для корректного ответа
+    # Подгружаем passes для корректного ответа
     entry = db.query(Entry).options(
-        joinedload(Entry.current_pass),
+        joinedload(Entry.passes),
         joinedload(Entry.visit_goals),
         joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()
@@ -804,7 +848,7 @@ def revoke_pass(
 ):
     """Отозвать текущий пропуск (ставим status=revoked у текущей записи passes)"""
     entry = db.query(Entry).options(
-        joinedload(Entry.current_pass),
+        joinedload(Entry.passes),
         joinedload(Entry.visit_goals),
         joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry_id).first()
@@ -821,13 +865,21 @@ def revoke_pass(
             detail="Недостаточно прав: требуется право 'can_revoke_pass'",
         )
 
-    if not entry.current_pass_id or entry.current_pass is None:
+    active_pass = get_active_pass_for_entry(entry)
+    if active_pass is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Текущий пропуск отсутствует")
 
+    external_id = getattr(active_pass, "external_id", None)
+    if external_id:
+        try:
+            revoke_external_pass(db=db, external_id=str(external_id))
+        except PassIntegrationError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
     timestamp = get_current_timestamp()
-    entry.current_pass.status = "revoked"
-    entry.current_pass.updated_at = timestamp
-    entry.current_pass.updated_by = current_user.id
+    active_pass.status = "revoked"
+    active_pass.updated_at = timestamp
+    active_pass.updated_by = current_user.id
 
     entry.updated_at = timestamp
     entry.updated_by = current_user.id
@@ -835,7 +887,7 @@ def revoke_pass(
     db.commit()
 
     entry = db.query(Entry).options(
-        joinedload(Entry.current_pass),
+        joinedload(Entry.passes),
         joinedload(Entry.visit_goals),
         joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()
@@ -917,7 +969,7 @@ def move_entry(
     )
     
     entry = db.query(Entry).options(
-        joinedload(Entry.current_pass),
+        joinedload(Entry.passes),
         joinedload(Entry.visit_goals),
         joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
     ).filter(Entry.id == entry.id).first()

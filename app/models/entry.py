@@ -23,16 +23,12 @@ class Entry(Base):
     # 10=черновик, 20=отменена, 30=гость принят, 40=отказ, 50=не оформлен, 60=трудоустроен
     state = Column(Integer, nullable=False, default=10)
 
-    # Текущий пропуск (может быть revoked/failed — это история, не признак "активности")
-    current_pass_id = Column(Text, ForeignKey("passes.id"), nullable=True)
-
     # Relationships
     creator = relationship("User", foreign_keys=[created_by], back_populates="entries_created")
     updater = relationship("User", foreign_keys=[updated_by], back_populates="entries_updated")
     deleter = relationship("User", foreign_keys=[deleted_by], back_populates="entries_deleted")
 
     passes = relationship("Pass", foreign_keys="Pass.entry_id", back_populates="entry")
-    current_pass = relationship("Pass", foreign_keys=[current_pass_id])
     visit_goals = relationship("VisitGoal", secondary=entry_visit_goals, back_populates="entries")
     meeting_reason = relationship(
         "EntryMeetingReason",

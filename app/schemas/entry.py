@@ -86,7 +86,7 @@ class EntryResponse(EntryBase):
     updated_at: Optional[str] = None
     updated_by: Optional[str] = None
     state: int = 10
-    current_pass_id: Optional[str] = None
+    pass_external_id: Optional[str] = None
     pass_status: Optional[str] = None
     visit_goal_ids: List[str] = []
     result_reason_id: Optional[str] = None
