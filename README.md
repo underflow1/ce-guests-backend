@@ -164,7 +164,8 @@ ce-guests-back/
 - `GET /api/v1/entries?today=YYYY-MM-DD` - получить записи за период (от сегодня + 8 дней)
 - `POST /api/v1/entries` - создать запись (требует авторизации)
 - `PUT /api/v1/entries/{entry_id}` - обновить запись (требует авторизации)
-- `PATCH /api/v1/entries/{entry_id}/completed` - изменить статус выполнения (требует авторизации)
+- `PATCH /api/v1/entries/{entry_id}/result` - установить state (10->20/30, 30/40/50/60->40/50/60)
+- `PATCH /api/v1/entries/{entry_id}/rollback` - откатить state (20/30->10, 40/50/60->30)
 - `DELETE /api/v1/entries/{entry_id}` - удалить запись (требует авторизации, мягкое удаление)
 - `GET /api/v1/responsible-autocomplete?q=query` - автодополнение ответственных
 

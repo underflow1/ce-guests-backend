@@ -55,17 +55,13 @@ class EntryDetailsUpdate(BaseModel):
 
 
 class EntryResultUpdate(BaseModel):
-    """Атомарная установка/смена результата (state=40/50/60) + причина (для 40/50)."""
+    """Атомарная установка state:
+    - 10 -> 20/30
+    - 30/40/50/60 -> 40/50/60
+    reason_id используется только для 40/50.
+    """
     state: int
     reason_id: Optional[str] = None
-
-
-class EntryCompletedUpdate(BaseModel):
-    completed: bool
-
-
-class VisitCancelledUpdate(BaseModel):
-    cancelled: bool
 
 
 class EntryMoveUpdate(BaseModel):

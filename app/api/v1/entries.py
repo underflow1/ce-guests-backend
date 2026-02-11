@@ -21,8 +21,6 @@ from app.schemas.entry import (
     EntryUpdate,
     EntryDetailsUpdate,
     EntryResultUpdate,
-    EntryCompletedUpdate,
-    VisitCancelledUpdate,
     EntryMoveUpdate,
     EntryResponse,
     EntriesListResponse,
@@ -142,7 +140,10 @@ def set_entry_result(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Атомарная установка/смена результата (state=40/50/60)."""
+    """Атомарная установка state:
+    - 10 -> 20/30
+    - 30/40/50/60 -> 40/50/60
+    """
     entry = db.query(Entry).filter(Entry.id == entry_id).first()
     if not entry or entry.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
@@ -150,37 +151,57 @@ def set_entry_result(
     permissions = get_user_permissions(current_user)
     can_set = "can_set_meeting_result" in permissions
     can_change = "can_change_meeting_result" in permissions
+    can_mark_completed = "can_mark_completed" in permissions
+    can_mark_cancelled = "can_mark_cancelled" in permissions
 
     current_state = int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT)
-    if current_state not in (STATE_COMPLETED, STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
+    next_state = int(payload.state)
+    if current_state == STATE_DRAFT:
+        if next_state == STATE_COMPLETED:
+            if not can_mark_completed:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Недостаточно прав: требуется право 'can_mark_completed'",
+                )
+        elif next_state == STATE_CANCELLED:
+            if not can_mark_cancelled:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Недостаточно прав: требуется право 'can_mark_cancelled'",
+                )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Из состояния 'черновик' доступны только переходы в 20 или 30",
+            )
+    elif current_state in (STATE_COMPLETED, STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
+        if next_state not in (STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный state результата")
+        if current_state == STATE_COMPLETED and not can_set:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Недостаточно прав: требуется право 'can_set_meeting_result'",
+            )
+        if current_state in (STATE_REFUSED, STATE_EMPLOYED) and not can_change:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Недостаточно прав: требуется право 'can_change_meeting_result'",
+            )
+        if current_state == STATE_PENDING and not can_set:
+            # Переквалификация из временного статуса разрешена всем, кто умеет ставить результат
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Недостаточно прав: требуется право 'can_set_meeting_result'",
+            )
+    else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Результат встречи можно устанавливать только после отметки 'принят'",
+            detail="Установка state недоступна для текущего состояния",
         )
-    if current_state == STATE_COMPLETED and not can_set:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Недостаточно прав: требуется право 'can_set_meeting_result'",
-        )
-    if current_state in (STATE_REFUSED, STATE_EMPLOYED) and not can_change:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Недостаточно прав: требуется право 'can_change_meeting_result'",
-        )
-    if current_state == STATE_PENDING and not can_set:
-        # Переквалификация из временного статуса разрешена всем, кто умеет ставить результат
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Недостаточно прав: требуется право 'can_set_meeting_result'",
-        )
-
-    next_state = int(payload.state)
-    if next_state not in (STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный state результата")
 
     timestamp = get_current_timestamp()
 
-    # Причину храним отдельно от entries
+    # Причину храним отдельно от entries (только для 40/50)
     if next_state in (STATE_REFUSED, STATE_PENDING):
         active_reasons = (
             db.query(Reason)
@@ -225,14 +246,15 @@ def set_entry_result(
                 entry.meeting_reason.reason_id = reason.id
         else:
             entry.meeting_reason = None
-    else:
-        # state=60: причин быть не должно
+    elif next_state in (STATE_DRAFT, STATE_CANCELLED, STATE_COMPLETED, STATE_EMPLOYED):
         if payload.reason_id is not None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Для state=60 причина не требуется",
+                detail="Для выбранного state причина не требуется",
             )
         entry.meeting_reason = None
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный state")
 
     _apply_state(entry, next_state)
     entry.updated_at = timestamp
@@ -249,8 +271,15 @@ def set_entry_result(
 
     data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
+    event_type = (
+        "entry_completed"
+        if next_state == STATE_COMPLETED
+        else "visit_cancelled"
+        if next_state == STATE_CANCELLED
+        else "result_set"
+    )
     broadcast_entry_event_with_data(
-        event_type="result_set",
+        event_type=event_type,
         change_data={"entry": response.dict(), "actor": actor},
         data_by_week_offset=data_by_week_offset,
     )
@@ -686,146 +715,6 @@ def update_entry(
             data_by_week_offset=data_by_week_offset,
         )
     
-    return response
-
-
-@router.patch("/entries/{entry_id}/completed", response_model=EntryResponse)
-def mark_entry_completed(
-    entry_id: str,
-    entry_data: EntryCompletedUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Отметить гостя как пришедшего (state 10 -> 30)."""
-    entry = db.query(Entry).filter(Entry.id == entry_id).first()
-    
-    if not entry:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Запись не найдена",
-        )
-    
-    if entry.deleted_at is not None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Запись удалена",
-        )
-
-    permissions = get_user_permissions(current_user)
-    if entry_data.completed:
-        if "can_mark_completed" not in permissions:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Недостаточно прав: требуется право 'can_mark_completed'",
-            )
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Откат 'гость принят' выполняется через /entries/{entry_id}/rollback",
-        )
-    
-    current_state = int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT)
-    timestamp = get_current_timestamp()
-
-    if entry_data.completed:
-        if current_state != STATE_DRAFT:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Отметить 'принят' можно только из состояния 'черновик'",
-            )
-        _apply_state(entry, STATE_COMPLETED)
-    entry.updated_at = timestamp
-    entry.updated_by = current_user.id
-    
-    db.commit()
-    db.refresh(entry)
-    
-    logger.info(
-        f"Обновлена отметка прихода: ID={entry.id}, state={getattr(entry, 'state', None)}, user='{current_user.username}'"
-    )
-    
-    entry = db.query(Entry).options(
-        joinedload(Entry.current_pass),
-        joinedload(Entry.visit_goals),
-        joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
-    ).filter(Entry.id == entry.id).first()
-    response = build_entry_response(entry)
-    
-    event_type = "entry_completed"
-    
-    # Отправляем WebSocket событие с полными данными недели
-    data_by_week_offset = get_entries_data_for_active_offsets(db)
-    actor = build_actor_display(current_user)
-    broadcast_entry_event_with_data(
-        event_type=event_type,
-        change_data={"entry": response.dict(), "actor": actor},
-        data_by_week_offset=data_by_week_offset,
-    )
-    
-    return response
-
-
-@router.patch("/entries/{entry_id}/cancelled", response_model=EntryResponse)
-def mark_visit_cancelled(
-    entry_id: str,
-    entry_data: VisitCancelledUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Отметить визит как отмененный (state 10 -> 20)."""
-    entry = db.query(Entry).filter(Entry.id == entry_id).first()
-
-    if not entry:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
-
-    if entry.deleted_at is not None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись удалена")
-
-    permissions = get_user_permissions(current_user)
-    if entry_data.cancelled:
-        if "can_mark_cancelled" not in permissions:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Недостаточно прав: требуется право 'can_mark_cancelled'",
-            )
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Снятие отмены выполняется через /entries/{entry_id}/rollback",
-        )
-
-    current_state = int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT)
-    timestamp = get_current_timestamp()
-
-    if entry_data.cancelled:
-        if current_state != STATE_DRAFT:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Отменить визит можно только из состояния 'черновик'",
-            )
-        _apply_state(entry, STATE_CANCELLED)
-    entry.updated_at = timestamp
-    entry.updated_by = current_user.id
-
-    db.commit()
-    db.refresh(entry)
-
-    entry = db.query(Entry).options(
-        joinedload(Entry.current_pass),
-        joinedload(Entry.visit_goals),
-        joinedload(Entry.meeting_reason).joinedload(EntryMeetingReason.reason),
-    ).filter(Entry.id == entry.id).first()
-    response = build_entry_response(entry)
-
-    event_type = "visit_cancelled"
-    data_by_week_offset = get_entries_data_for_active_offsets(db)
-    actor = build_actor_display(current_user)
-    broadcast_entry_event_with_data(
-        event_type=event_type,
-        change_data={"entry": response.dict(), "actor": actor},
-        data_by_week_offset=data_by_week_offset,
-    )
-
     return response
 
 
