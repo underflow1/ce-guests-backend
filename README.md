@@ -166,6 +166,7 @@ ce-guests-back/
 - `PUT /api/v1/entries/{entry_id}` - обновить запись (требует авторизации)
 - `PATCH /api/v1/entries/{entry_id}/result` - установить state (10->20/30, 30/40/50/60->40/50/60)
 - `PATCH /api/v1/entries/{entry_id}/rollback` - откатить state (20/30->10, 40/50/60->30)
+- `GET /api/v1/reference-data` - получить справочники (visit_goals, reasons, reasons_by_state)
 - `DELETE /api/v1/entries/{entry_id}` - удалить запись (требует авторизации, мягкое удаление)
 - `GET /api/v1/responsible-autocomplete?q=query` - автодополнение ответственных
 
