@@ -52,6 +52,9 @@ DATABASE_URL=sqlite:///./ce_guests.db
 SECRET_KEY=your-secret-key-change-in-production
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
+REFRESH_TOKEN_EXPIRE_HOURS=12
+REFRESH_TOKEN_PEPPER=change-me-random-long-secret
+TOKEN_CLEANUP_INTERVAL_SECONDS=300
 CORS_ORIGINS=http://localhost:5173
 TIMEZONE=Europe/Moscow
 HOST=127.0.0.1
@@ -249,6 +252,9 @@ alembic current
 - `SECRET_KEY` - секретный ключ для JWT (обязательно изменить в продакшене!)
 - `ALGORITHM` - алгоритм JWT (например, `HS256`)
 - `ACCESS_TOKEN_EXPIRE_MINUTES` - время жизни токена (например, `1440` = 24 часа)
+- `REFRESH_TOKEN_EXPIRE_HOURS` - срок жизни refresh токена в часах (по умолчанию `1`)
+- `REFRESH_TOKEN_PEPPER` - отдельный секрет для HMAC refresh токенов (рекомендуется длинная случайная строка)
+- `TOKEN_CLEANUP_INTERVAL_SECONDS` - интервал фоновой очистки истекших/отозванных refresh токенов в секундах (по умолчанию `300`, `0` и меньше - отключает воркер)
 - `CORS_ORIGINS` - список разрешенных origins через запятую (например, `http://localhost:5173,http://localhost:3000`)
 - `TIMEZONE` - часовой пояс (например, `Europe/Moscow`)
 - `HOST` - хост для прослушивания (по умолчанию `127.0.0.1`)
@@ -296,7 +302,10 @@ sudo systemctl enable ce-guests-back
 
 ### Рабочие дни
 
-Система использует API isdayoff.ru для определения рабочих дней. При недоступности API используется fallback на определение по дню недели (пн-пт = рабочий).
+Система использует настройку производственного календаря:
+- если производственный календарь включен, рабочие дни берутся из таблицы `production_calendar_days`;
+- если календарь выключен или для даты нет данных, используется fallback по дню недели (пн-пт рабочие, сб-вс выходные).
+- загрузка календаря выполняется отдельно на текущий год через настройки.
 
 ### WebSocket
 

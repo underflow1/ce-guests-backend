@@ -128,10 +128,7 @@ def refresh_token(refresh_data: RefreshRequest, db: Session = Depends(get_db)):
         )
     
     # Инвалидируем старый refresh token (rotation)
-    revoke_refresh_token(db, refresh_token_obj)
-    
-    # Очищаем истекшие токены пользователя
-    cleanup_expired_tokens(db, user_id=user_id)
+    revoke_refresh_token(db, refresh_token_obj, commit=False)
     
     # Создаем новый access token
     access_token = create_access_token(data={"sub": user_id})
@@ -140,7 +137,8 @@ def refresh_token(refresh_data: RefreshRequest, db: Session = Depends(get_db)):
     new_refresh_token = generate_refresh_token()
     
     # Сохраняем новый refresh token в БД
-    create_refresh_token_db(db, user_id=user_id, refresh_token=new_refresh_token)
+    create_refresh_token_db(db, user_id=user_id, refresh_token=new_refresh_token, commit=False)
+    db.commit()
     
     logger.info(f"Обновлен токен для пользователя ID: {user_id}")
     

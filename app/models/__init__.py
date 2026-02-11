@@ -10,6 +10,7 @@ from app.models.visit_goal import VisitGoal
 from app.models.entry_meeting_reason import EntryMeetingReason
 from app.models.reason import Reason
 from app.models.state_reason_option import StateReasonOption
+from app.models.production_calendar_day import ProductionCalendarDay
 
 __all__ = [
     "User",
@@ -24,4 +25,5 @@ __all__ = [
     "EntryMeetingReason",
     "Reason",
     "StateReasonOption",
+    "ProductionCalendarDay",
 ]

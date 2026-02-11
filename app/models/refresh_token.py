@@ -10,6 +10,7 @@ class RefreshToken(Base):
 
     id = Column(Text, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(Text, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_lookup_hash = Column(Text, nullable=True, index=True)
     token_hash = Column(Text, nullable=False, index=True)
     expires_at = Column(Text, nullable=False)
     created_at = Column(Text, nullable=False)

@@ -1,5 +1,6 @@
 import json
 from collections import defaultdict
+from datetime import datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ from app.schemas.reason import ReasonResponse
 from app.schemas.reference_data import ReferenceDataResponse
 from app.schemas.visit_goal import VisitGoalResponse
 from app.services.settings import normalize_pass_integration
+from app.services.production_calendar import get_production_calendar_status, is_production_calendar_enabled
 
 router = APIRouter()
 
@@ -25,6 +27,8 @@ def get_reference_data(
     current_user: User = Depends(get_current_user),
 ):
     pass_ordering_enabled = False
+    production_calendar_enabled = is_production_calendar_enabled(db)
+    production_calendar_status = get_production_calendar_status(db, datetime.now().year)
     pass_setting = db.query(Setting).filter(Setting.key == "pass_integration").first()
     if pass_setting and pass_setting.value:
         try:
@@ -74,4 +78,12 @@ def get_reference_data(
         reasons=[ReasonResponse.from_orm(reason) for reason in active_reasons],
         reasons_by_state=reasons_by_state,
         pass_ordering_enabled=pass_ordering_enabled,
+        production_calendar_enabled=production_calendar_enabled,
+        production_calendar_loaded_for_current_year=bool(
+            production_calendar_status.get("is_complete_for_current_year")
+        ),
+        production_calendar_fallback_active=bool(
+            production_calendar_enabled
+            and not production_calendar_status.get("is_complete_for_current_year")
+        ),
     )

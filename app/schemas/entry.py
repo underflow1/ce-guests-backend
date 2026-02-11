@@ -56,7 +56,7 @@ class EntryDetailsUpdate(BaseModel):
 
 class EntryResultUpdate(BaseModel):
     """Атомарная установка state:
-    - 10 -> 20/30
+    - 10 -> 20/30/40/50/60
     - 30/40/50/60 -> 40/50/60
     reason_id используется только для 40/50.
     """

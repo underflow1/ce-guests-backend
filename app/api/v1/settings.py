@@ -1,34 +1,57 @@
 import json
 import uuid
+from datetime import datetime
 from typing import Any, Dict
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_active_admin
 from app.database import get_db
 from app.models.setting import Setting
 from app.models.user import User
-from app.api.deps import get_current_active_admin
-from app.schemas.setting import (
-    SettingsUpdateRequest,
-    SettingsResponse,
-    NOTIFICATION_TYPE_CODES,
-)
+from app.schemas.setting import NOTIFICATION_TYPE_CODES, SettingsResponse, SettingsUpdateRequest
 from app.services.auth import get_current_timestamp
-from app.services.settings import (
-    build_default_notifications,
-    normalize_notifications,
-    normalize_pass_integration,
-    build_settings_metadata,
+from app.services.production_calendar import (
+    clear_production_calendar_year,
+    get_production_calendar_status,
+    load_production_calendar_year,
+    set_production_calendar_meta,
 )
+from app.services.settings import build_settings_metadata, normalize_notifications, normalize_pass_integration, normalize_production_calendar
 
 router = APIRouter()
 
 
-def build_settings_response(notifications: Dict[str, Any], pass_integration: Dict[str, Any]) -> Dict[str, Any]:
+def _read_settings_data(db: Session) -> Dict[str, Any]:
+    records = db.query(Setting).all()
+    settings_data: Dict[str, Any] = {}
+    for record in records:
+        if record.value:
+            try:
+                settings_data[record.key] = json.loads(record.value)
+            except json.JSONDecodeError:
+                settings_data[record.key] = {}
+        else:
+            settings_data[record.key] = {}
+    return settings_data
+
+
+def build_settings_response(
+    db: Session,
+    notifications: Dict[str, Any],
+    pass_integration: Dict[str, Any],
+    production_calendar: Dict[str, Any],
+) -> Dict[str, Any]:
+    current_year = datetime.now().year
     return {
         "notifications": notifications,
         "pass_integration": pass_integration,
+        "production_calendar": {
+            **production_calendar,
+            "status": get_production_calendar_status(db=db, year=current_year),
+        },
         "metadata": build_settings_metadata(),
     }
 
@@ -39,25 +62,12 @@ def get_settings(
     current_user: User = Depends(get_current_active_admin),
 ):
     """Получить текущие настройки (только для админов)"""
-    records = db.query(Setting).all()
-    settings_data: Dict[str, Any] = {}
-
-    for record in records:
-        if record.value:
-            try:
-                settings_data[record.key] = json.loads(record.value)
-            except json.JSONDecodeError:
-                settings_data[record.key] = {}
-        else:
-            settings_data[record.key] = {}
+    settings_data = _read_settings_data(db)
 
     notifications = normalize_notifications(settings_data.get("notifications"))
     pass_integration = normalize_pass_integration(settings_data.get("pass_integration"))
-    return {
-        "notifications": notifications,
-        "pass_integration": pass_integration,
-        "metadata": build_settings_metadata(),
-    }
+    production_calendar = normalize_production_calendar(settings_data.get("production_calendar"))
+    return build_settings_response(db, notifications, pass_integration, production_calendar)
 
 
 @router.put("/settings", response_model=SettingsResponse, response_model_exclude_none=True)
@@ -69,6 +79,7 @@ def update_settings(
     """Обновить настройки (только для админов)"""
     notifications = payload.notifications
     pass_integration = payload.pass_integration
+    production_calendar = payload.production_calendar
 
     # Валидация активных провайдеров
     max_provider = notifications.providers.max_via_green_api
@@ -120,6 +131,7 @@ def update_settings(
 
     notifications_setting = db.query(Setting).filter(Setting.key == "notifications").first()
     pass_setting = db.query(Setting).filter(Setting.key == "pass_integration").first()
+    calendar_setting = db.query(Setting).filter(Setting.key == "production_calendar").first()
     timestamp = get_current_timestamp()
 
     if notifications_setting:
@@ -152,14 +164,83 @@ def update_settings(
         )
         db.add(pass_setting)
 
+    production_calendar_dict = production_calendar.dict(exclude_none=True)
+    production_calendar_value = json.dumps(production_calendar_dict, ensure_ascii=False)
+    if calendar_setting:
+        calendar_setting.value = production_calendar_value
+        calendar_setting.updated_at = timestamp
+        calendar_setting.updated_by = current_user.id
+    else:
+        calendar_setting = Setting(
+            id=str(uuid.uuid4()),
+            key="production_calendar",
+            value=production_calendar_value,
+            updated_at=timestamp,
+            updated_by=current_user.id,
+        )
+        db.add(calendar_setting)
+
     db.commit()
     db.refresh(notifications_setting)
     db.refresh(pass_setting)
+    db.refresh(calendar_setting)
 
     normalized = normalize_notifications(notifications_dict)
     normalized_pass = normalize_pass_integration(pass_dict)
-    return {
-        "notifications": normalized,
-        "pass_integration": normalized_pass,
-        "metadata": build_settings_metadata(),
-    }
+    normalized_calendar = normalize_production_calendar(production_calendar_dict)
+    return build_settings_response(db, normalized, normalized_pass, normalized_calendar)
+
+
+@router.post("/settings/production-calendar/load-current-year", response_model=SettingsResponse, response_model_exclude_none=True)
+def load_current_year_production_calendar(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_admin),
+):
+    year = datetime.now().year
+    try:
+        load_production_calendar_year(db, year)
+        set_production_calendar_meta(
+            db,
+            last_loaded_at=get_current_timestamp(),
+            updated_by=current_user.id,
+        )
+        db.commit()
+    except httpx.HTTPError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Не удалось загрузить производственный календарь: {str(exc)}",
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        )
+
+    settings_data = _read_settings_data(db)
+    notifications = normalize_notifications(settings_data.get("notifications"))
+    pass_integration = normalize_pass_integration(settings_data.get("pass_integration"))
+    production_calendar = normalize_production_calendar(settings_data.get("production_calendar"))
+    return build_settings_response(db, notifications, pass_integration, production_calendar)
+
+
+@router.delete("/settings/production-calendar/current-year", response_model=SettingsResponse, response_model_exclude_none=True)
+def clear_current_year_production_calendar(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_admin),
+):
+    year = datetime.now().year
+    clear_production_calendar_year(db, year)
+    set_production_calendar_meta(
+        db,
+        last_cleared_at=get_current_timestamp(),
+        updated_by=current_user.id,
+    )
+    db.commit()
+
+    settings_data = _read_settings_data(db)
+    notifications = normalize_notifications(settings_data.get("notifications"))
+    pass_integration = normalize_pass_integration(settings_data.get("pass_integration"))
+    production_calendar = normalize_production_calendar(settings_data.get("production_calendar"))
+    return build_settings_response(db, notifications, pass_integration, production_calendar)
