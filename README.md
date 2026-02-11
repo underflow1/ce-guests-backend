@@ -212,8 +212,8 @@ ce-guests-back/
   - `can_delete_entry` - удаление записей
   - `can_move_ui` - перемещение записей (UI)
   - `can_delete_ui` - удаление записей (UI)
-  - `can_mark_completed` - отметка выполненным
-  - `can_unmark_completed` - снятие отметки выполненным
+  - `can_mark_arrived` - отметка прибытия гостя
+  - `can_unmark_arrived` - снятие отметки прибытия гостя
   - и другие...
 
 ## Миграции

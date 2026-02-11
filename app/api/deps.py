@@ -83,13 +83,13 @@ def get_user_permissions(user: User) -> Set[str]:
         return {
             # Бэкенд-права
             "can_view", "can_add", "can_edit_entry", "can_delete_entry",
-            "can_mark_completed", "can_unmark_completed", "can_move_entry",
+            "can_mark_arrived", "can_unmark_arrived", "can_move_entry",
             "can_mark_cancelled", "can_unmark_cancelled",
             "can_mark_pass", "can_revoke_pass",
             "can_set_meeting_result",
             "can_change_meeting_result", "can_rollback_meeting_result",
             # Фронтенд-права
-            "can_move_ui", "can_mark_completed_ui", "can_unmark_completed_ui",
+            "can_move_ui", "can_mark_arrived_ui", "can_unmark_arrived_ui",
             "can_edit_entry_ui", "can_delete_ui",
             "can_mark_cancelled_ui", "can_unmark_cancelled_ui",
             "can_mark_pass_ui", "can_revoke_pass_ui",

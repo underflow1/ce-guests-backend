@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 NOTIFICATION_TYPES = [
     {"code": "entry_created", "title": "Создание записи"},
     {"code": "entry_updated", "title": "Обновление записи"},
-    {"code": "entry_completed", "title": "Гость отмечен как пришедший"},
+    {"code": "entry_arrived", "title": "Гость отмечен как прибывший"},
     {"code": "entry_rollback", "title": "Состояние записи откатано"},
     {"code": "result_set", "title": "Результат установлен"},
     {"code": "visit_cancelled", "title": "Визит отменен"},

@@ -51,7 +51,7 @@ tz = timezone(settings.TIMEZONE)
 # Entry state machine (первичный источник бизнес-логики)
 STATE_DRAFT = 10
 STATE_CANCELLED = 20
-STATE_COMPLETED = 30
+STATE_ARRIVED = 30
 STATE_REFUSED = 40
 STATE_PENDING = 50
 STATE_EMPLOYED = 60
@@ -73,7 +73,7 @@ def _apply_state(entry: Entry, new_state: int) -> None:
         entry.meeting_reason = None
         return
 
-    if new_state == STATE_COMPLETED:
+    if new_state == STATE_ARRIVED:
         entry.meeting_reason = None
         return
 
@@ -151,17 +151,17 @@ def set_entry_result(
     permissions = get_user_permissions(current_user)
     can_set = "can_set_meeting_result" in permissions
     can_change = "can_change_meeting_result" in permissions
-    can_mark_completed = "can_mark_completed" in permissions
+    can_mark_arrived = "can_mark_arrived" in permissions
     can_mark_cancelled = "can_mark_cancelled" in permissions
 
     current_state = int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT)
     next_state = int(payload.state)
     if current_state == STATE_DRAFT:
-        if next_state == STATE_COMPLETED:
-            if not can_mark_completed:
+        if next_state == STATE_ARRIVED:
+            if not can_mark_arrived:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Недостаточно прав: требуется право 'can_mark_completed'",
+                    detail="Недостаточно прав: требуется право 'can_mark_arrived'",
                 )
         elif next_state == STATE_CANCELLED:
             if not can_mark_cancelled:
@@ -174,10 +174,10 @@ def set_entry_result(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Из состояния 'черновик' доступны только переходы в 20 или 30",
             )
-    elif current_state in (STATE_COMPLETED, STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
+    elif current_state in (STATE_ARRIVED, STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
         if next_state not in (STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный state результата")
-        if current_state == STATE_COMPLETED and not can_set:
+        if current_state == STATE_ARRIVED and not can_set:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Недостаточно прав: требуется право 'can_set_meeting_result'",
@@ -246,7 +246,7 @@ def set_entry_result(
                 entry.meeting_reason.reason_id = reason.id
         else:
             entry.meeting_reason = None
-    elif next_state in (STATE_DRAFT, STATE_CANCELLED, STATE_COMPLETED, STATE_EMPLOYED):
+    elif next_state in (STATE_DRAFT, STATE_CANCELLED, STATE_ARRIVED, STATE_EMPLOYED):
         if payload.reason_id is not None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -272,8 +272,8 @@ def set_entry_result(
     data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
     event_type = (
-        "entry_completed"
-        if next_state == STATE_COMPLETED
+        "entry_arrived"
+        if next_state == STATE_ARRIVED
         else "visit_cancelled"
         if next_state == STATE_CANCELLED
         else "result_set"
@@ -310,11 +310,11 @@ def rollback_entry_state(
                 detail="Недостаточно прав: требуется право 'can_unmark_cancelled'",
             )
         rollback_target = STATE_DRAFT
-    elif current_state == STATE_COMPLETED:
-        if "can_unmark_completed" not in permissions:
+    elif current_state == STATE_ARRIVED:
+        if "can_unmark_arrived" not in permissions:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Недостаточно прав: требуется право 'can_unmark_completed'",
+                detail="Недостаточно прав: требуется право 'can_unmark_arrived'",
             )
         rollback_target = STATE_DRAFT
     elif current_state in (STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
@@ -323,7 +323,7 @@ def rollback_entry_state(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Недостаточно прав: требуется право 'can_rollback_meeting_result'",
             )
-        rollback_target = STATE_COMPLETED
+        rollback_target = STATE_ARRIVED
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
