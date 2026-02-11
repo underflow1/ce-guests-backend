@@ -257,38 +257,52 @@ def set_entry_result(
     return response
 
 
-@router.patch("/entries/{entry_id}/result/rollback", response_model=EntryResponse)
-def rollback_entry_result(
+@router.patch("/entries/{entry_id}/rollback", response_model=EntryResponse)
+def rollback_entry_state(
     entry_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("can_view")),
 ):
-    """Откат результата встречи в состояние 'гость принят' (40/50/60 -> 30).
-
-    Особое правило: откат из state=50 (Не оформлен) разрешён всем, у кого есть can_view.
-    Откат из state=40/60 по-прежнему требует can_rollback_meeting_result.
+    """Единый откат состояния:
+    - 20/30 -> 10
+    - 40/50/60 -> 30
     """
     entry = db.query(Entry).filter(Entry.id == entry_id).first()
     if not entry or entry.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
 
+    permissions = get_user_permissions(current_user)
     current_state = int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT)
-    if current_state not in (STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Откат результата возможен только после установки результата",
-        )
-
-    if current_state != STATE_PENDING:
-        permissions = get_user_permissions(current_user)
-        if "can_rollback_meeting_result" not in permissions:
+    rollback_target = None
+    if current_state == STATE_CANCELLED:
+        if "can_unmark_cancelled" not in permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Недостаточно прав: требуется право 'can_unmark_cancelled'",
+            )
+        rollback_target = STATE_DRAFT
+    elif current_state == STATE_COMPLETED:
+        if "can_unmark_completed" not in permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Недостаточно прав: требуется право 'can_unmark_completed'",
+            )
+        rollback_target = STATE_DRAFT
+    elif current_state in (STATE_REFUSED, STATE_PENDING, STATE_EMPLOYED):
+        if current_state in (STATE_REFUSED, STATE_EMPLOYED) and "can_rollback_meeting_result" not in permissions:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Недостаточно прав: требуется право 'can_rollback_meeting_result'",
             )
+        rollback_target = STATE_COMPLETED
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Откат недоступен для текущего состояния",
+        )
 
     timestamp = get_current_timestamp()
-    _apply_state(entry, STATE_COMPLETED)
+    _apply_state(entry, rollback_target)
     entry.updated_at = timestamp
     entry.updated_by = current_user.id
     db.commit()
@@ -304,7 +318,7 @@ def rollback_entry_result(
     data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
-        event_type="result_rollback",
+        event_type="entry_rollback",
         change_data={"entry": response.dict(), "actor": actor},
         data_by_week_offset=data_by_week_offset,
     )
@@ -682,7 +696,7 @@ def mark_entry_completed(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Отметить гостя как пришедшего (state 10 <-> 30)"""
+    """Отметить гостя как пришедшего (state 10 -> 30)."""
     entry = db.query(Entry).filter(Entry.id == entry_id).first()
     
     if not entry:
@@ -705,11 +719,10 @@ def mark_entry_completed(
                 detail="Недостаточно прав: требуется право 'can_mark_completed'",
             )
     else:
-        if "can_unmark_completed" not in permissions:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Недостаточно прав: требуется право 'can_unmark_completed'",
-            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Откат 'гость принят' выполняется через /entries/{entry_id}/rollback",
+        )
     
     current_state = int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT)
     timestamp = get_current_timestamp()
@@ -721,14 +734,6 @@ def mark_entry_completed(
                 detail="Отметить 'принят' можно только из состояния 'черновик'",
             )
         _apply_state(entry, STATE_COMPLETED)
-    else:
-        if current_state != STATE_COMPLETED:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Снять 'принят' можно только из состояния 'гость принят'",
-            )
-        _apply_state(entry, STATE_DRAFT)
-
     entry.updated_at = timestamp
     entry.updated_by = current_user.id
     
@@ -746,7 +751,7 @@ def mark_entry_completed(
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
     
-    event_type = "entry_completed" if entry_data.completed else "entry_uncompleted"
+    event_type = "entry_completed"
     
     # Отправляем WebSocket событие с полными данными недели
     data_by_week_offset = get_entries_data_for_active_offsets(db)
@@ -767,7 +772,7 @@ def mark_visit_cancelled(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Отметить визит как отмененный (state 10 <-> 20)"""
+    """Отметить визит как отмененный (state 10 -> 20)."""
     entry = db.query(Entry).filter(Entry.id == entry_id).first()
 
     if not entry:
@@ -784,11 +789,10 @@ def mark_visit_cancelled(
                 detail="Недостаточно прав: требуется право 'can_mark_cancelled'",
             )
     else:
-        if "can_unmark_cancelled" not in permissions:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Недостаточно прав: требуется право 'can_unmark_cancelled'",
-            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Снятие отмены выполняется через /entries/{entry_id}/rollback",
+        )
 
     current_state = int(getattr(entry, "state", STATE_DRAFT) or STATE_DRAFT)
     timestamp = get_current_timestamp()
@@ -800,14 +804,6 @@ def mark_visit_cancelled(
                 detail="Отменить визит можно только из состояния 'черновик'",
             )
         _apply_state(entry, STATE_CANCELLED)
-    else:
-        if current_state != STATE_CANCELLED:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Снять отмену можно только из состояния 'отменена'",
-            )
-        _apply_state(entry, STATE_DRAFT)
-
     entry.updated_at = timestamp
     entry.updated_by = current_user.id
 
@@ -821,7 +817,7 @@ def mark_visit_cancelled(
     ).filter(Entry.id == entry.id).first()
     response = build_entry_response(entry)
 
-    event_type = "visit_cancelled" if entry_data.cancelled else "visit_uncancelled"
+    event_type = "visit_cancelled"
     data_by_week_offset = get_entries_data_for_active_offsets(db)
     actor = build_actor_display(current_user)
     broadcast_entry_event_with_data(
