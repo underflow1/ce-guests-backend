@@ -49,6 +49,8 @@ class PassIntegrationSettings(BaseModel):
     base_url: Optional[str] = None
     login: Optional[str] = None
     password: Optional[str] = None
+    object: Optional[str] = None
+    corpa: Optional[str] = None
 
 
 class SettingsUpdateRequest(BaseModel):

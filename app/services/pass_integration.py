@@ -19,6 +19,10 @@ class PassIntegrationAmbiguousError(PassIntegrationError):
     pass
 
 
+class PassIntegrationDisabledError(PassIntegrationError):
+    pass
+
+
 def _normalize_name(value: Any) -> str:
     return str(value or "").strip().casefold()
 
@@ -69,22 +73,36 @@ def _matches_identity(order: dict[str, Any], surname: str, name: str, fathername
     )
 
 
-def _load_pass_credentials(db: Session) -> tuple[str, str, str]:
+def _load_pass_integration_config(db: Session) -> dict[str, str]:
     record = db.query(Setting).filter(Setting.key == "pass_integration").first()
+    payload: dict[str, Any] = {}
     if record and record.value:
         try:
             payload = normalize_pass_integration(json.loads(record.value))
-            if payload.get("enabled") and payload.get("base_url") and payload.get("login") and payload.get("password"):
-                return payload["base_url"], payload["login"], payload["password"]
         except Exception:
-            pass
+            payload = {}
 
-    if settings.PASS_API_BASE_URL and settings.PASS_API_LOGIN and settings.PASS_API_PASSWORD:
-        return settings.PASS_API_BASE_URL, settings.PASS_API_LOGIN, settings.PASS_API_PASSWORD
+    if not bool(payload.get("enabled")):
+        raise PassIntegrationDisabledError("Заказ пропусков отключен в настройках")
 
-    raise PassIntegrationError(
-        "Интеграция пропусков не настроена: заполните pass_integration в настройках или PASS_API_* в .env"
-    )
+    base_url = str(payload.get("base_url") or settings.PASS_API_BASE_URL or "").strip()
+    login_value = str(payload.get("login") or settings.PASS_API_LOGIN or "").strip()
+    password_value = str(payload.get("password") or settings.PASS_API_PASSWORD or "").strip()
+    object_value = str(payload.get("object") or settings.PASS_API_OBJECT or "").strip()
+    corpa_value = str(payload.get("corpa") or settings.PASS_API_CORPA or "").strip()
+
+    if not base_url or not login_value or not password_value:
+        raise PassIntegrationError("Интеграция пропусков не настроена: заполните base_url, login и password")
+    if not object_value or not corpa_value:
+        raise PassIntegrationError("Интеграция пропусков не настроена: заполните object и corpa")
+
+    return {
+        "base_url": base_url,
+        "login": login_value,
+        "password": password_value,
+        "object": object_value,
+        "corpa": corpa_value,
+    }
 
 
 def _parse_poll_delays(raw: str) -> list[int]:
@@ -93,12 +111,12 @@ def _parse_poll_delays(raw: str) -> list[int]:
 
 
 def order_external_pass(db: Session, entry_name: str, pass_date: str) -> str:
-    if not settings.PASS_API_OBJECT:
-        raise PassIntegrationError("Не задан PASS_API_OBJECT")
-    if not settings.PASS_API_CORPA:
-        raise PassIntegrationError("Не задан PASS_API_CORPA")
-
-    base_url, login_value, password_value = _load_pass_credentials(db)
+    config = _load_pass_integration_config(db)
+    base_url = config["base_url"]
+    login_value = config["login"]
+    password_value = config["password"]
+    object_value = config["object"]
+    corpa_value = config["corpa"]
     surname, name, fathername = _split_full_name(entry_name)
     birthday = settings.PASS_API_BIRTHDAY
 
@@ -121,9 +139,9 @@ def order_external_pass(db: Session, entry_name: str, pass_date: str) -> str:
             "endd": _to_ddmmyyyy(pass_date),
             "status": "all",
             "search": "",
-            "obj": settings.PASS_API_OBJECT,
+            "obj": object_value,
             "type": "all",
-            "corp": settings.PASS_API_CORPA,
+            "corp": corpa_value,
         }
 
         before_response = client.get("/allbyallcorp", params=list_params)
@@ -137,11 +155,11 @@ def order_external_pass(db: Session, entry_name: str, pass_date: str) -> str:
             "Surname": surname,
             "FatherNmae": fathername,
             "OrederType": settings.PASS_API_ORDER_TYPE,
-            "Corpa": settings.PASS_API_CORPA,
+            "Corpa": corpa_value,
             "GovNum": "",
             "Mark": "",
             "Model": "",
-            "Object": settings.PASS_API_OBJECT,
+            "Object": object_value,
             "Buildin": settings.PASS_API_BUILDIN,
             "Floor": settings.PASS_API_FLOOR,
             "Office": settings.PASS_API_OFFICE,
@@ -196,7 +214,10 @@ def revoke_external_pass(db: Session, external_id: str) -> None:
     if not external_id:
         raise PassIntegrationError("Не указан внешний ID пропуска для отзыва")
 
-    base_url, login_value, password_value = _load_pass_credentials(db)
+    config = _load_pass_integration_config(db)
+    base_url = config["base_url"]
+    login_value = config["login"]
+    password_value = config["password"]
     client = httpx.Client(
         base_url=base_url.rstrip("/"),
         timeout=settings.PASS_API_TIMEOUT_SECONDS,

@@ -90,27 +90,29 @@ def update_settings(
             detail="Для telegram обязательны bot_token и chat_id",
         )
 
-    # Валидация типов уведомлений
-    invalid_types = [
-        notification_type
-        for notification_type in notifications.enabled_notification_types
-        if notification_type not in NOTIFICATION_TYPE_CODES
-    ]
-    if invalid_types:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Недопустимые типы уведомлений: {', '.join(invalid_types)}",
-        )
+    # Совместимость: устаревшие коды уведомлений игнорируем вместо ошибки
+    valid_enabled_types = []
+    seen_types = set()
+    for notification_type in notifications.enabled_notification_types:
+        if notification_type not in NOTIFICATION_TYPE_CODES:
+            continue
+        if notification_type in seen_types:
+            continue
+        seen_types.add(notification_type)
+        valid_enabled_types.append(notification_type)
+    notifications.enabled_notification_types = valid_enabled_types
 
     # Валидация pass_integration
     if pass_integration.enabled and (
         not pass_integration.base_url
         or not pass_integration.login
         or not pass_integration.password
+        or not pass_integration.object
+        or not pass_integration.corpa
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Для pass_integration обязательны base_url, login и password",
+            detail="Для pass_integration обязательны base_url, login, password, object и corpa",
         )
 
     notifications_dict = notifications.dict(exclude_none=True)

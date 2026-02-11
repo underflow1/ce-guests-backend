@@ -45,6 +45,7 @@ from pytz import timezone
 from app.config import settings
 from app.services.pass_integration import (
     PassIntegrationAmbiguousError,
+    PassIntegrationDisabledError,
     PassIntegrationError,
     order_external_pass,
     revoke_external_pass,
@@ -791,6 +792,8 @@ def order_pass(
             data_by_week_offset=data_by_week_offset,
         )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except PassIntegrationDisabledError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     except PassIntegrationError as exc:
         entry_snapshot = build_entry_response(entry)
         data_by_week_offset = get_entries_data_for_active_offsets(db)
@@ -873,6 +876,8 @@ def revoke_pass(
     if external_id:
         try:
             revoke_external_pass(db=db, external_id=str(external_id))
+        except PassIntegrationDisabledError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
         except PassIntegrationError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
