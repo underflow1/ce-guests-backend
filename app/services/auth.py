@@ -1,5 +1,6 @@
 import secrets
 import hashlib
+import hmac
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
@@ -56,18 +57,27 @@ def generate_refresh_token() -> str:
 
 
 def generate_refresh_token_lookup_hash(token: str) -> str:
-    """Быстрый детерминированный хеш для поиска refresh token в БД"""
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+    """Быстрый HMAC-хеш для поиска refresh token в БД"""
+    return hmac.new(
+        settings.REFRESH_TOKEN_PEPPER.encode("utf-8"),
+        token.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def hash_refresh_token(token: str) -> str:
-    """Хеширование refresh token (используем тот же контекст что и для паролей)"""
-    return pwd_context.hash(token)
+    """Хеширование refresh token для хранения в БД."""
+    # Для refresh используем быстрый HMAC-хеш с pepper вместо argon2.
+    return generate_refresh_token_lookup_hash(token)
 
 
 def verify_refresh_token(plain_token: str, hashed_token: str) -> bool:
     """Проверка refresh token"""
-    return pwd_context.verify(plain_token, hashed_token)
+    if hashed_token.startswith("$argon2"):
+        # Легаси-совместимость со старыми токенами.
+        return pwd_context.verify(plain_token, hashed_token)
+    expected_hash = hash_refresh_token(plain_token)
+    return hmac.compare_digest(expected_hash, hashed_token)
 
 
 def create_refresh_token_db(
@@ -128,10 +138,10 @@ def _is_refresh_token_expired(expires_at_raw: str) -> bool:
 
 
 def _find_refresh_token_legacy_scan(db: Session, refresh_token: str) -> Optional[RefreshToken]:
-    """Fallback для старых записей без token_lookup_hash."""
+    """Fallback для старых argon2 записей (до HMAC)."""
     legacy_tokens = db.query(RefreshToken).filter(
         RefreshToken.revoked == 0,
-        RefreshToken.token_lookup_hash.is_(None),
+        RefreshToken.token_hash.like("$argon2%"),
     ).all()
     for token in legacy_tokens:
         if verify_refresh_token(refresh_token, token.token_hash) and not _is_refresh_token_expired(token.expires_at):

@@ -53,6 +53,7 @@ SECRET_KEY=your-secret-key-change-in-production
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 REFRESH_TOKEN_EXPIRE_HOURS=12
+REFRESH_TOKEN_PEPPER=change-me-random-long-secret
 TOKEN_CLEANUP_INTERVAL_SECONDS=300
 CORS_ORIGINS=http://localhost:5173
 TIMEZONE=Europe/Moscow
@@ -252,6 +253,7 @@ alembic current
 - `ALGORITHM` - алгоритм JWT (например, `HS256`)
 - `ACCESS_TOKEN_EXPIRE_MINUTES` - время жизни токена (например, `1440` = 24 часа)
 - `REFRESH_TOKEN_EXPIRE_HOURS` - срок жизни refresh токена в часах (по умолчанию `1`)
+- `REFRESH_TOKEN_PEPPER` - отдельный секрет для HMAC refresh токенов (рекомендуется длинная случайная строка)
 - `TOKEN_CLEANUP_INTERVAL_SECONDS` - интервал фоновой очистки истекших/отозванных refresh токенов в секундах (по умолчанию `300`, `0` и меньше - отключает воркер)
 - `CORS_ORIGINS` - список разрешенных origins через запятую (например, `http://localhost:5173,http://localhost:3000`)
 - `TIMEZONE` - часовой пояс (например, `Europe/Moscow`)
