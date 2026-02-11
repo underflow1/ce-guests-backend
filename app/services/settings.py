@@ -67,6 +67,23 @@ def normalize_pass_integration(value: Any) -> Dict[str, Any]:
     return defaults
 
 
+def build_default_production_calendar() -> Dict[str, Any]:
+    return {
+        "enabled": False,
+    }
+
+
+def normalize_production_calendar(value: Any) -> Dict[str, Any]:
+    defaults = build_default_production_calendar()
+    if not isinstance(value, dict):
+        return defaults
+
+    if "enabled" in value:
+        defaults["enabled"] = bool(value.get("enabled"))
+
+    return defaults
+
+
 def build_settings_metadata() -> Dict[str, Any]:
     return {
         "notifications": {

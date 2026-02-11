@@ -457,14 +457,14 @@ def get_entries_data(db: Session, today: Optional[str] = None, week_offset: int 
 
         # Получаем структуру недели для нижней панели
         calendar_start = time.time()
-        calendar_structure = get_week_structure(bottom_reference_date)
+        calendar_structure = get_week_structure(db, bottom_reference_date)
         calendar_time = time.time() - calendar_start
         logger.debug(f"get_week_structure заняло: {calendar_time:.3f}с")
 
         # Находим предыдущий и следующий рабочие дни относительно текущей даты
         workdays_start = time.time()
-        previous_workday = get_previous_workday(reference_date)
-        next_workday = get_next_workday(reference_date)
+        previous_workday = get_previous_workday(db, reference_date)
+        next_workday = get_next_workday(db, reference_date)
         workdays_time = time.time() - workdays_start
         logger.debug(f"get_workdays (previous/next) заняло: {workdays_time:.3f}с")
 

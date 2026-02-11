@@ -53,9 +53,26 @@ class PassIntegrationSettings(BaseModel):
     corpa: Optional[str] = None
 
 
+class ProductionCalendarStatus(BaseModel):
+    current_year: int
+    loaded_days_count: int
+    expected_days_count: int
+    missing_days_count: int
+    is_loaded_for_current_year: bool
+    is_complete_for_current_year: bool
+    last_loaded_at: Optional[str] = None
+    last_cleared_at: Optional[str] = None
+
+
+class ProductionCalendarSettings(BaseModel):
+    enabled: bool = False
+    status: Optional[ProductionCalendarStatus] = None
+
+
 class SettingsUpdateRequest(BaseModel):
     notifications: NotificationsSettings
     pass_integration: PassIntegrationSettings = Field(default_factory=PassIntegrationSettings)
+    production_calendar: ProductionCalendarSettings = Field(default_factory=ProductionCalendarSettings)
 
 
 class NotificationTypeMeta(BaseModel):
@@ -74,4 +91,5 @@ class SettingsMeta(BaseModel):
 class SettingsResponse(BaseModel):
     notifications: NotificationsSettings
     pass_integration: PassIntegrationSettings
+    production_calendar: ProductionCalendarSettings
     metadata: SettingsMeta
