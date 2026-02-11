@@ -13,6 +13,7 @@ class Settings:
     ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "5"))
     REFRESH_TOKEN_EXPIRE_HOURS: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_HOURS", "1"))
+    TOKEN_CLEANUP_INTERVAL_SECONDS: int = int(os.getenv("TOKEN_CLEANUP_INTERVAL_SECONDS", "300"))
     
     # CORS
     CORS_ORIGINS: list[str] = [
