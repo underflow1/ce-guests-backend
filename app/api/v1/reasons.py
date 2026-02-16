@@ -21,10 +21,10 @@ router = APIRouter()
 
 def _validate_state_for_reasons(state_value: int) -> int:
     s = int(state_value)
-    if s not in (40, 50):
+    if s not in (40, 50, 60):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Причины поддерживаются только для state=40 (Отказ) и state=50 (Не оформлен)",
+            detail="Причины поддерживаются только для state=40 (Отказ), 50 (Не оформлен), 60 (Трудоустроен)",
         )
     return s
 
