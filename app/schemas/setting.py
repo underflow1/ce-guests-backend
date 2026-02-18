@@ -69,10 +69,38 @@ class ProductionCalendarSettings(BaseModel):
     status: Optional[ProductionCalendarStatus] = None
 
 
+class PhoneNotificationsAmi(BaseModel):
+    host: Optional[str] = None
+    port: int = 5038
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+
+class PhoneNotificationsFreepbx(BaseModel):
+    ssh_host: Optional[str] = None
+    ssh_user: Optional[str] = None
+    ssh_key: Optional[str] = None
+    sounds_path: Optional[str] = None
+
+
+DEFAULT_ARRIVAL_TEMPLATE = (
+    "Привет девчонки, это оперативный дежурный беспокоит, тут подошел %GUESTNAME%, просьба встретить."
+)
+
+
+class PhoneNotificationsSettings(BaseModel):
+    enabled: bool = False
+    extension: Optional[str] = None
+    arrival_template: Optional[str] = None
+    ami: PhoneNotificationsAmi = Field(default_factory=PhoneNotificationsAmi)
+    freepbx: PhoneNotificationsFreepbx = Field(default_factory=PhoneNotificationsFreepbx)
+
+
 class SettingsUpdateRequest(BaseModel):
     notifications: NotificationsSettings
     pass_integration: PassIntegrationSettings = Field(default_factory=PassIntegrationSettings)
     production_calendar: ProductionCalendarSettings = Field(default_factory=ProductionCalendarSettings)
+    phone_notifications: PhoneNotificationsSettings = Field(default_factory=PhoneNotificationsSettings)
 
 
 class NotificationTypeMeta(BaseModel):
@@ -92,4 +120,5 @@ class SettingsResponse(BaseModel):
     notifications: NotificationsSettings
     pass_integration: PassIntegrationSettings
     production_calendar: ProductionCalendarSettings
+    phone_notifications: PhoneNotificationsSettings
     metadata: SettingsMeta

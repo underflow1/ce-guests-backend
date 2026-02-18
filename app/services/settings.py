@@ -84,6 +84,55 @@ def normalize_production_calendar(value: Any) -> Dict[str, Any]:
     return defaults
 
 
+def build_default_phone_notifications() -> Dict[str, Any]:
+    from app.schemas.setting import DEFAULT_ARRIVAL_TEMPLATE
+
+    return {
+        "enabled": False,
+        "extension": None,
+        "arrival_template": DEFAULT_ARRIVAL_TEMPLATE,
+        "ami": {
+            "host": None,
+            "port": 5038,
+            "username": None,
+            "password": None,
+        },
+        "freepbx": {
+            "ssh_host": None,
+            "ssh_user": None,
+            "ssh_key": None,
+            "sounds_path": None,
+        },
+    }
+
+
+def normalize_phone_notifications(value: Any) -> Dict[str, Any]:
+    defaults = build_default_phone_notifications()
+    if not isinstance(value, dict):
+        return defaults
+
+    if "enabled" in value:
+        defaults["enabled"] = bool(value.get("enabled"))
+    if "extension" in value:
+        defaults["extension"] = value.get("extension")
+    if "arrival_template" in value:
+        defaults["arrival_template"] = value.get("arrival_template")
+
+    ami = value.get("ami")
+    if isinstance(ami, dict):
+        for key in ["host", "port", "username", "password"]:
+            if key in ami:
+                defaults["ami"][key] = ami[key]
+
+    freepbx = value.get("freepbx")
+    if isinstance(freepbx, dict):
+        for key in ["ssh_host", "ssh_user", "ssh_key", "sounds_path"]:
+            if key in freepbx:
+                defaults["freepbx"][key] = freepbx[key]
+
+    return defaults
+
+
 def build_settings_metadata() -> Dict[str, Any]:
     return {
         "notifications": {
