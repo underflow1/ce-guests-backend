@@ -92,6 +92,7 @@ class PhoneNotificationsSettings(BaseModel):
     enabled: bool = False
     extension: Optional[str] = None
     arrival_template: Optional[str] = None
+    call_cooldown_seconds: int = 10
     ami: PhoneNotificationsAmi = Field(default_factory=PhoneNotificationsAmi)
     freepbx: PhoneNotificationsFreepbx = Field(default_factory=PhoneNotificationsFreepbx)
 

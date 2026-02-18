@@ -91,6 +91,7 @@ def build_default_phone_notifications() -> Dict[str, Any]:
         "enabled": False,
         "extension": None,
         "arrival_template": DEFAULT_ARRIVAL_TEMPLATE,
+        "call_cooldown_seconds": 10,
         "ami": {
             "host": None,
             "port": 5038,
@@ -117,6 +118,8 @@ def normalize_phone_notifications(value: Any) -> Dict[str, Any]:
         defaults["extension"] = value.get("extension")
     if "arrival_template" in value:
         defaults["arrival_template"] = value.get("arrival_template")
+    if "call_cooldown_seconds" in value and isinstance(value.get("call_cooldown_seconds"), (int, float)):
+        defaults["call_cooldown_seconds"] = max(1, int(value["call_cooldown_seconds"]))
 
     ami = value.get("ami")
     if isinstance(ami, dict):

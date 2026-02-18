@@ -8,6 +8,7 @@ from app.database import SessionLocal
 from app.models.setting import Setting
 from app.schemas.setting import NOTIFICATION_TYPES
 from app.services.settings import build_default_notifications, normalize_notifications
+from app.services.phone_call import maybe_call_on_guest_arrived
 
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,9 @@ def send_telegram(bot_token: str, chat_id: str, message: str) -> None:
 
 
 def send_notifications_for_event(event_type: str, payload: Dict[str, Any]) -> None:
+    if event_type == "entry_arrived":
+        maybe_call_on_guest_arrived(payload)
+
     try:
         notifications = load_notifications_settings()
         if not should_send_notification(event_type, notifications):
