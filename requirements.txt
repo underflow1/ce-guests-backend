@@ -10,3 +10,7 @@ python-dotenv==1.0.0
 pytz==2023.3
 httpx==0.25.2
 email-validator==2.1.1
+edge-tts>=6.1.0
+pydub>=0.25.0
+asterisk-ami>=0.1.9
+paramiko>=3.0.0

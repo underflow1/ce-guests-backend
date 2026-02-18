@@ -19,7 +19,13 @@ from app.services.production_calendar import (
     load_production_calendar_year,
     set_production_calendar_meta,
 )
-from app.services.settings import build_settings_metadata, normalize_notifications, normalize_pass_integration, normalize_production_calendar
+from app.services.settings import (
+    build_settings_metadata,
+    normalize_notifications,
+    normalize_pass_integration,
+    normalize_phone_notifications,
+    normalize_production_calendar,
+)
 
 router = APIRouter()
 
@@ -43,6 +49,7 @@ def build_settings_response(
     notifications: Dict[str, Any],
     pass_integration: Dict[str, Any],
     production_calendar: Dict[str, Any],
+    phone_notifications: Dict[str, Any],
 ) -> Dict[str, Any]:
     current_year = datetime.now().year
     return {
@@ -52,6 +59,7 @@ def build_settings_response(
             **production_calendar,
             "status": get_production_calendar_status(db=db, year=current_year),
         },
+        "phone_notifications": phone_notifications,
         "metadata": build_settings_metadata(),
     }
 
@@ -67,7 +75,10 @@ def get_settings(
     notifications = normalize_notifications(settings_data.get("notifications"))
     pass_integration = normalize_pass_integration(settings_data.get("pass_integration"))
     production_calendar = normalize_production_calendar(settings_data.get("production_calendar"))
-    return build_settings_response(db, notifications, pass_integration, production_calendar)
+    phone_notifications = normalize_phone_notifications(settings_data.get("phone_notifications"))
+    return build_settings_response(
+        db, notifications, pass_integration, production_calendar, phone_notifications
+    )
 
 
 @router.put("/settings", response_model=SettingsResponse, response_model_exclude_none=True)
@@ -80,6 +91,27 @@ def update_settings(
     notifications = payload.notifications
     pass_integration = payload.pass_integration
     production_calendar = payload.production_calendar
+    phone_notifications = payload.phone_notifications
+
+    # Валидация phone_notifications при enabled
+    if phone_notifications.enabled:
+        if not phone_notifications.extension or not str(phone_notifications.extension).strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Для phone_notifications обязателен extension",
+            )
+        ami = phone_notifications.ami
+        if not ami.host or not ami.username or not ami.password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Для phone_notifications обязательны ami host, username и password",
+            )
+        freepbx = phone_notifications.freepbx
+        if not freepbx.ssh_host or not freepbx.ssh_user or not freepbx.ssh_key or not freepbx.sounds_path:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Для phone_notifications обязательны freepbx ssh_host, ssh_user, ssh_key и sounds_path",
+            )
 
     # Валидация активных провайдеров
     max_provider = notifications.providers.max_via_green_api
@@ -132,6 +164,7 @@ def update_settings(
     notifications_setting = db.query(Setting).filter(Setting.key == "notifications").first()
     pass_setting = db.query(Setting).filter(Setting.key == "pass_integration").first()
     calendar_setting = db.query(Setting).filter(Setting.key == "production_calendar").first()
+    phone_setting = db.query(Setting).filter(Setting.key == "phone_notifications").first()
     timestamp = get_current_timestamp()
 
     if notifications_setting:
@@ -180,15 +213,35 @@ def update_settings(
         )
         db.add(calendar_setting)
 
+    phone_dict = phone_notifications.dict(exclude_none=True)
+    phone_value = json.dumps(phone_dict, ensure_ascii=False)
+    if phone_setting:
+        phone_setting.value = phone_value
+        phone_setting.updated_at = timestamp
+        phone_setting.updated_by = current_user.id
+    else:
+        phone_setting = Setting(
+            id=str(uuid.uuid4()),
+            key="phone_notifications",
+            value=phone_value,
+            updated_at=timestamp,
+            updated_by=current_user.id,
+        )
+        db.add(phone_setting)
+
     db.commit()
     db.refresh(notifications_setting)
     db.refresh(pass_setting)
     db.refresh(calendar_setting)
+    db.refresh(phone_setting)
 
     normalized = normalize_notifications(notifications_dict)
     normalized_pass = normalize_pass_integration(pass_dict)
     normalized_calendar = normalize_production_calendar(production_calendar_dict)
-    return build_settings_response(db, normalized, normalized_pass, normalized_calendar)
+    normalized_phone = normalize_phone_notifications(phone_dict)
+    return build_settings_response(
+        db, normalized, normalized_pass, normalized_calendar, normalized_phone
+    )
 
 
 @router.post("/settings/production-calendar/load-current-year", response_model=SettingsResponse, response_model_exclude_none=True)
@@ -222,7 +275,10 @@ def load_current_year_production_calendar(
     notifications = normalize_notifications(settings_data.get("notifications"))
     pass_integration = normalize_pass_integration(settings_data.get("pass_integration"))
     production_calendar = normalize_production_calendar(settings_data.get("production_calendar"))
-    return build_settings_response(db, notifications, pass_integration, production_calendar)
+    phone_notifications = normalize_phone_notifications(settings_data.get("phone_notifications"))
+    return build_settings_response(
+        db, notifications, pass_integration, production_calendar, phone_notifications
+    )
 
 
 @router.delete("/settings/production-calendar/current-year", response_model=SettingsResponse, response_model_exclude_none=True)
@@ -243,4 +299,7 @@ def clear_current_year_production_calendar(
     notifications = normalize_notifications(settings_data.get("notifications"))
     pass_integration = normalize_pass_integration(settings_data.get("pass_integration"))
     production_calendar = normalize_production_calendar(settings_data.get("production_calendar"))
-    return build_settings_response(db, notifications, pass_integration, production_calendar)
+    phone_notifications = normalize_phone_notifications(settings_data.get("phone_notifications"))
+    return build_settings_response(
+        db, notifications, pass_integration, production_calendar, phone_notifications
+    )
